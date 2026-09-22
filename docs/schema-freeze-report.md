@@ -19,7 +19,38 @@ REQUIREMENT_MAPPING=COMPLETE
 TYPECHECK=PASS (99 tests)
 LINT=PASS
 BUILD=PASS
+P0_BLOCKERS=0
+P1_BLOCKERS=0
 SCHEMA_FREEZE_CANDIDATE=YES
+```
+
+## Application Boundary (UI Handoff)
+
+```
+FROZEN_SCHEMA_SHA=91f090ce800d3a46b7a02a82e7ba34c89f2ab5a0
+FROZEN_SCHEMA_UNCHANGED=YES
+
+APPLICATION_PUBLIC_API=src/application/index.ts
+DASHBOARD_RUN_RESULT=DashboardRunSuccess | DashboardRunFailure
+ASYNC_SERVICE_CONTRACT=createDashboardService() -> DashboardService
+PIPELINE_EVENT_CONTRACT=PipelineEvent (onEvent callback)
+ERROR_CONTRACT=DashboardError (code/message/details/recoverable)
+
+GOLDEN_FIXTURES=5/5 (G1-G5 via real pipeline)
+FOLLOWUP_FIXTURES=5/5 (G1-G5 follow-ups via real pipeline)
+FAILURE_FIXTURES=2/2 (validation_error, empty_data)
+
+SERIALIZABLE_CONTRACT=PASS (JSON.stringify on all results)
+UI_DOMAIN_SEPARATION=PASS (UI only imports from src/application/)
+APPLICATION_TESTS=63/63 PASS (AP1-AP10)
+TYPECHECK=PASS (0 errors)
+TESTS=PASS (179/179)
+LINT=PASS (0 errors, 0 warnings)
+BUILD=PASS (173ms)
+
+P0_BLOCKERS=0
+P1_BLOCKERS=0
+UI_HANDOFF_READY=YES
 ```
 
 ## Round 2: Contract Tightening (独立审计后)

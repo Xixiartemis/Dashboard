@@ -287,3 +287,52 @@ npm run build        # success (268ms)
 | `tests/golden-and-negative.test.ts` | Follow-up patches 新增 presentation metadata 断言 |
 | `tests/validation.test.ts` | rawInput 适配 data_as_of |
 | `tests/renderer-probe.test.ts` | rawInput 适配 data_as_of |
+---
+
+## Application Boundary (v1.0 → UI Handoff)
+
+### 为什么先做这个 Boundary
+
+Schema 已冻结，下一阶段准备让两个 AI Agent 并行开发（Hermes 负责 Pipeline/Interpreter，Google Studio 负责 UI）。发现下一类主要风险已经不是 Schema correctness，而是两个 Agent 的 contract drift——各自按自己的理解定义数据结构，集成时 UI 需要一种数据，Pipeline 返回另一种数据，导致双方一起返工。
+
+所以先建立 Application Boundary，再让 UI 和 Pipeline 分头开发。
+
+### 核心设计决策
+
+1. **DashboardRunResult = 唯一结果模型**：Initial 和 Follow-up 返回同一个类型，UI 不需要两套代码。
+
+2. **Async 从第一天开始**：虽然当前全是确定性同步逻辑，但 Interpreter 未来会接 LLM，所以 Public API 全部是 async/Promise，避免将来 UI 全部改写。
+
+3. **Interpreter Port 作为依赖边界**：DashboardService 依赖 `DashboardInterpreterPort` 接口，不写死 Gemini/MiMo/Rules。Deterministic Interpreter、LLM Interpreter、Test Adapter 都可以替换，Application Contract 和 UI 都不用变。
+
+4. **Fixture 必须由真实 Pipeline 产生**：`getDemoFixtures()` 内部调用 `executeSpec(GOLDEN_CASES[i].expectedSpec)`，走完全相同的 validation → analytics → insight → renderer 管道。不手写 ECharts option、不硬编码 insight 数字。这样 Fixture 和未来 Runtime 用的是同一条执行链，不会漂移。
+
+5. **Result 必须可 JSON 序列化**：`JSON.stringify(result)` 必须成功。不包含 Map/Set/Date/Function/class instance。这保证了 Fixture、Replay、Web Worker、HTTP 传输的可行性。
+
+6. **UI 不重新计算金融数据**：change_pct、ranking、insight 数字全部在 Application 层算好，UI 只消费纯数据。这消除了第二套事实来源。
+
+7. **Pipeline Trace 是真实执行过程**：不是假的 loading，每一步的 start/success/error 都在真正进入/完成阶段时 emit。UI 后面如果要为了动画延迟视觉 transition，那是 UI 的事情。
+
+### 文件结构
+
+```
+src/application/
+├── contracts.ts          — 类型定义（DashboardRunResult, PipelineEvent, InterpreterPort 等）
+├── materializer.ts       — executeSpec() / executeFollowUp() 核心执行路径
+├── dashboard-service.ts  — async DashboardService 实现（Interpreter placeholder）
+├── demo-fixtures.ts      — 5 golden + 5 follow-up + 2 error fixtures
+└── index.ts              — public barrel export
+```
+
+### 文件职责边界
+
+| 文件 | import 范围 |
+|------|-------------|
+| `contracts.ts` | 只 import 类型（DashboardSpec, EChartsOption） |
+| `materializer.ts` | import Domain 内部（validation, analytics, renderer, patch） |
+| `dashboard-service.ts` | import contracts + materializer |
+| `demo-fixtures.ts` | import fixtures + materializer + validation（for error fixtures） |
+| `index.ts` | 只 re-export |
+
+UI 只 import `index.ts`，不直接 import materializer 或 Domain 模块。
+
