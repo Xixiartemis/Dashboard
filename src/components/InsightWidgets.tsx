@@ -159,10 +159,6 @@ const RankAnnotation: React.FC<RankAnnotationProps> = ({
   const TitleIcon = isDrop ? TrendingDown : isVolume ? BarChart2 : TrendingUp;
   const iconColor = isDrop ? 'text-rose-400' : isVolume ? 'text-sky-400' : 'text-emerald-400';
 
-  // Compute summary stats for the digital display board
-  const values = item.points.map((p) => p.value);
-  const peakVal = values.length > 0 ? (isDrop ? Math.min(...values) : Math.max(...values)) : 0;
-  const avgVal = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
   const unit = item.points[0]?.unit;
 
   return (
@@ -247,22 +243,6 @@ const RankAnnotation: React.FC<RankAnnotationProps> = ({
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* Quantitative Summary Footer */}
-      <div className="mt-4 pt-3 border-t border-white/[0.07] flex items-center justify-between text-[11px] font-mono text-[#8F9994]">
-        <div>
-          <span>极值 </span>
-          <span className="font-semibold text-[#F3F5F2]">
-            {formatMetricValue(peakVal, unit)}
-          </span>
-        </div>
-        <div>
-          <span>前 {item.limit} 日均值 </span>
-          <span className="font-semibold text-[#F3F5F2]">
-            {formatMetricValue(avgVal, unit)}
-          </span>
         </div>
       </div>
     </div>

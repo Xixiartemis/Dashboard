@@ -1,6 +1,0 @@
-{
-  "name": "AI Stock Analysis Dashboard",
-  "description": "自然语言驱动的结构化股票分析看板，支持可解释 Pipeline 执行与交互式追问更新。",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
