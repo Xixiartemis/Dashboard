@@ -1,5 +1,7 @@
 /**
  * Tests: Golden Cases + Follow-up Patches + Negative Cases + Insight/Transform consistency.
+ *
+ * Updated for Round 3: presentation metadata consistency verification after patches.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -24,7 +26,7 @@ describe('Golden Cases - Structural + Semantic', () => {
 });
 
 describe('Golden Cases - Follow-up Patches', () => {
-  it('G1 follow-up: replace volume → change_pct', () => {
+  it('G1 follow-up: replace volume → change_pct (structure + presentation)', () => {
     const result = applyPatch(GOLDEN_CASES[0].expectedSpec, GOLDEN_CASES[0].patch!);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -32,30 +34,52 @@ describe('Golden Cases - Follow-up Patches', () => {
       expect(result.spec.metrics.some((m) => m.id === 'volume')).toBe(false);
       const ids = result.spec.metrics.map((m) => m.id);
       expect(new Set(ids).size).toBe(ids.length); // no duplicates
+      // Presentation: volume_view title should now mention 涨跌幅, not 成交量
+      const volumeView = result.spec.views.find((v) => v.id === 'volume_view')!;
+      expect(volumeView.title).toContain('涨跌幅');
+      expect(volumeView.title).not.toContain('成交量');
     }
   });
 
-  it('G2 follow-up: set time range to 10', () => {
+  it('G2 follow-up: set time range to 10 (structure + presentation)', () => {
     const result = applyPatch(GOLDEN_CASES[1].expectedSpec, GOLDEN_CASES[1].patch!);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.spec.timeRange.count).toBe(10);
+    if (result.ok) {
+      expect(result.spec.timeRange.count).toBe(10);
+      // Presentation: titles and intentSummary should say 10, not 20
+      for (const v of result.spec.views) {
+        expect(v.title).toContain('10');
+        expect(v.title).not.toContain('20个交易日');
+      }
+      expect(result.spec.insight.intentSummary).toContain('10');
+      expect(result.spec.insight.intentSummary).not.toContain('20个交易日');
+    }
   });
 
-  it('G3 follow-up: set mark to line', () => {
+  it('G3 follow-up: set mark to line (structure only, no title change required)', () => {
     const result = applyPatch(GOLDEN_CASES[2].expectedSpec, GOLDEN_CASES[2].patch!);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.spec.views.find((v) => v.id === 'change_bar')!.series[0].mark).toBe('line');
+      // Title doesn't need to change for mark — that's the design decision
     }
   });
 
-  it('G4 follow-up: set time range to 20', () => {
+  it('G4 follow-up: set time range to 20 (structure + presentation)', () => {
     const result = applyPatch(GOLDEN_CASES[3].expectedSpec, GOLDEN_CASES[3].patch!);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.spec.timeRange.count).toBe(20);
+    if (result.ok) {
+      expect(result.spec.timeRange.count).toBe(20);
+      // Presentation: titles and intentSummary should say 20, not 30
+      for (const v of result.spec.views) {
+        expect(v.title).toContain('20');
+        expect(v.title).not.toContain('30个交易日');
+      }
+      expect(result.spec.insight.intentSummary).toContain('20');
+    }
   });
 
-  it('G5 follow-up: add close to hl_view', () => {
+  it('G5 follow-up: add close to hl_view (structure + presentation)', () => {
     const result = applyPatch(GOLDEN_CASES[4].expectedSpec, GOLDEN_CASES[4].patch!);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -63,6 +87,8 @@ describe('Golden Cases - Follow-up Patches', () => {
       expect(view.series.length).toBe(3);
       expect(view.series[2].field).toBe('close');
       expect(result.spec.metrics.some((m) => m.id === 'close')).toBe(true);
+      // Presentation: title should now include 收盘价
+      expect(view.title).toContain('收盘价');
     }
   });
 });

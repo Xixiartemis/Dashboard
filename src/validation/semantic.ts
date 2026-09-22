@@ -70,6 +70,10 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
       errors.push(makeError('UNSUPPORTED_METRIC', 'metrics', `metric=${m.id}`));
     } else {
       const def = getMetric(m.id)!;
+      if (m.label !== def.label) {
+        errors.push(makeError('METRIC_LABEL_MISMATCH', `metrics[${m.id}]`,
+          `expected label="${def.label}", got "${m.label}"`));
+      }
       if (m.unit !== def.unit) {
         errors.push(makeError('INVALID_UNIT', `metrics[${m.id}]`, `expected ${def.unit}, got ${m.unit}`));
       }
@@ -111,6 +115,14 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
         errors.push(makeError('METRIC_MARK_INCOMPATIBLE', `views[${v.id}].series[${s.id}]`,
           `${s.field} does not support ${s.mark}`));
       }
+      // Check unit matches Metric Registry (Fix #3: Registry as sole truth)
+      if (isKnownMetric(s.field)) {
+        const def = getMetric(s.field)!;
+        if (s.unit !== def.unit) {
+          errors.push(makeError('SERIES_UNIT_MISMATCH', `views[${v.id}].series[${s.id}]`,
+            `expected unit=${def.unit} from registry, got ${s.unit}`));
+        }
+      }
     }
   }
 
@@ -135,17 +147,16 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
 
   // ── 9. Insight facts consistency ──────────────────────────────────────
   for (const fact of spec.insight.facts) {
-    // insight.metric must be in spec.metrics
-    if (!metricIds.has(fact.metric)) {
-      errors.push(makeError('MISSING_SERIES_FIELD', `insight.facts`,
-        `metric="${fact.metric}" not in spec.metrics`));
+    if (fact.kind === 'period_change') {
+      // insight.metric must be in spec.metrics
+      if (!metricIds.has(fact.metric)) {
+        errors.push(makeError('MISSING_SERIES_FIELD', `insight.facts`,
+          `metric="${fact.metric}" not in spec.metrics`));
+      }
     }
-    // rank_summary must reference a valid transform
     if (fact.kind === 'rank_summary') {
-      if (!fact.transformRef) {
-        errors.push(makeError('MISSING_TRANSFORM_REF', `insight.facts`,
-          `rank_summary requires transformRef`));
-      } else if (!transformIds.has(fact.transformRef)) {
+      // rank_summary must reference a valid transform
+      if (!transformIds.has(fact.transformRef)) {
         errors.push(makeError('MISSING_TRANSFORM_REF', `insight.facts`,
           `transformRef=${fact.transformRef} not in transforms`));
       }

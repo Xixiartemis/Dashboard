@@ -89,7 +89,7 @@ describe('Renderer Contract Probe', () => {
     const analytics = runAnalytics({
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [
         { id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' },
         { id: 'change_pct', label: '涨跌幅', kind: 'derived', unit: '%' },

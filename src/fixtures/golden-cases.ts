@@ -4,9 +4,10 @@
  * Updated for v1.0.0 contract tightening:
  * - schemaVersion = '1.0.0' (literal)
  * - insight.intentSummary (not summary)
- * - insight facts use rank_summary with transformRef
+ * - insight facts: rank_summary uses transformRef only (no metric/label duplication)
  * - x = { field: 'date', type: 'ordinal' } (literal)
  * - dataSource.resolved = 'embedded_mock', priceAdjustment = 'raw'
+ * - timeRange.end = 'data_as_of' (literal, single date source)
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
@@ -30,7 +31,7 @@ const DS = (spec: Omit<DashboardSpec, 'schemaVersion' | 'dataSource'>): Dashboar
 
 export const G1_SPEC: DashboardSpec = DS({
   instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
   metrics: [
     { id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' },
     { id: 'volume', label: '成交量', kind: 'raw', unit: 'share' },
@@ -58,7 +59,7 @@ export const G1_SPEC: DashboardSpec = DS({
   insight: {
     intentSummary: '分析A公司最近30个交易日的收盘价和成交量变化',
     facts: [
-      { kind: 'rank_summary', metric: 'change_pct', label: '跌幅最大的3个交易日', transformRef: 'worst_3_days' },
+      { kind: 'rank_summary', transformRef: 'worst_3_days' },
     ],
   },
 });
@@ -75,7 +76,7 @@ export const G1_PATCH: DashboardPatch = {
 
 export const G2_SPEC: DashboardSpec = DS({
   instrument: { symbol: 'MOCK.B', displayName: 'B公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 20, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 20, end: 'data_as_of' },
   metrics: [
     { id: 'open', label: '开盘价', kind: 'raw', unit: 'CNY' },
     { id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' },
@@ -110,7 +111,7 @@ export const G2_PATCH: DashboardPatch = {
 
 export const G3_SPEC: DashboardSpec = DS({
   instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 15, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 15, end: 'data_as_of' },
   metrics: [
     { id: 'change_pct', label: '涨跌幅', kind: 'derived', unit: '%' },
   ],
@@ -129,7 +130,7 @@ export const G3_SPEC: DashboardSpec = DS({
   insight: {
     intentSummary: '展示A公司最近15个交易日的涨跌幅',
     facts: [
-      { kind: 'rank_summary', metric: 'change_pct', label: '涨幅最大的3天', transformRef: 'best_3_days' },
+      { kind: 'rank_summary', transformRef: 'best_3_days' },
     ],
   },
 });
@@ -147,7 +148,7 @@ export const G3_PATCH: DashboardPatch = {
 
 export const G4_SPEC: DashboardSpec = DS({
   instrument: { symbol: 'MOCK.B', displayName: 'B公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
   metrics: [
     { id: 'volume', label: '成交量', kind: 'raw', unit: 'share' },
   ],
@@ -166,7 +167,7 @@ export const G4_SPEC: DashboardSpec = DS({
   insight: {
     intentSummary: '查看B公司最近30个交易日的成交量',
     facts: [
-      { kind: 'rank_summary', metric: 'volume', label: '成交量最高的5天', transformRef: 'top_5_volume' },
+      { kind: 'rank_summary', transformRef: 'top_5_volume' },
     ],
   },
 });
@@ -182,7 +183,7 @@ export const G4_PATCH: DashboardPatch = {
 
 export const G5_SPEC: DashboardSpec = DS({
   instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 20, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 20, end: 'data_as_of' },
   metrics: [
     { id: 'high', label: '最高价', kind: 'raw', unit: 'CNY' },
     { id: 'low', label: '最低价', kind: 'raw', unit: 'CNY' },

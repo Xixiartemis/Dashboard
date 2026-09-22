@@ -30,7 +30,7 @@ export const TimeRangeSchema = z
     mode: TimeRangeModeSchema,
     basis: TimeRangeBasisSchema,
     count: z.number().int().min(1).max(60),
-    end: z.string(), // resolved to manifest.asOf at validation time
+    end: z.literal('data_as_of'), // v1: deadline always equals dataSource.asOf; no arbitrary historical end date
   })
   .strict();
 export type TimeRange = z.infer<typeof TimeRangeSchema>;
@@ -135,22 +135,31 @@ export const ViewSchema = z
 export type View = z.infer<typeof ViewSchema>;
 
 // ── Insight ────────────────────────────────────────────────────────────────
-// v1: removed min_volume_days (no implementation)
-// v1: ranking facts reference transforms via transformRef (single source of truth)
+// v1: ranking facts are pure transform references — no duplicated metric/label.
+// period_change retains metric+label for its own data.
+// rank_summary label is derived deterministically from the referenced transform
+// + Metric Registry, never stored as free-form fact text.
 
-export const InsightFactKindSchema = z.enum([
-  'period_change',
-  'rank_summary',    // replaces worst_days/best_days/max_volume_days — references transform
-]);
-
-export const InsightFactSchema = z
+export const PeriodChangeFactSchema = z
   .object({
-    kind: InsightFactKindSchema,
+    kind: z.literal('period_change'),
     metric: z.string(),
     label: z.string(),
-    transformRef: z.string().optional(), // required for rank_summary
   })
   .strict();
+
+export const RankSummaryFactSchema = z
+  .object({
+    kind: z.literal('rank_summary'),
+    transformRef: z.string(),        // required — the sole source of ranking truth
+    labelKey: z.string().optional(),  // optional display hint, does NOT override transform semantics
+  })
+  .strict();
+
+export const InsightFactSchema = z.discriminatedUnion('kind', [
+  PeriodChangeFactSchema,
+  RankSummaryFactSchema,
+]);
 export type InsightFact = z.infer<typeof InsightFactSchema>;
 
 export const InsightSchema = z
@@ -186,27 +195,17 @@ export function parseDashboardSpec(input: unknown) {
 
 // ── JSON Schema export (derived from Zod, single source of truth) ─────────
 
+import { toJSONSchema } from 'zod';
+
 export function getDashboardSpecJsonSchema() {
-  // Zod v4 supports .jsonSchema() on schemas
-  try {
-    const jsonSchema = (DashboardSpecSchema as any).jsonSchema?.();
-    if (jsonSchema) {
-      return {
-        $schema: 'https://json-schema.org/draft/2020-12/schema',
-        title: 'DashboardSpec',
-        description: 'Structured stock analysis dashboard specification v1.0.0',
-        ...jsonSchema,
-      };
-    }
-  } catch {
-    // fallback if jsonSchema not available
-  }
-  // Minimal fallback: we still have Zod as the real validator
+  // Zod 4 official API: z.toJSONSchema()
+  const jsonSchema = toJSONSchema(DashboardSpecSchema, {
+    target: 'draft-2020-12',
+  });
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     title: 'DashboardSpec',
     description: 'Structured stock analysis dashboard specification v1.0.0',
-    note: 'Zod schema is the source of truth. This JSON Schema is informational only.',
-    _sourceOfTruth: 'DashboardSpecSchema (Zod)',
+    ...jsonSchema,
   };
 }

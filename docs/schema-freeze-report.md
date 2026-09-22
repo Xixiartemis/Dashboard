@@ -85,7 +85,46 @@ SCHEMA_VERSION=1.0.0
 SCHEMA_FREEZE_CANDIDATE=YES
 ```
 
-## 自审检查清单 (Round 2)
+## Round 3: 收口 — 消除剩余重复事实源和 Patch 后 presentation 漂移
+
+### 修复的 5 个问题
+
+| # | 问题 | 修复方式 |
+|---|------|----------|
+| 15 | Patch 后 presentation metadata (title/intentSummary) 与结构状态不一致 | applyPatch() 管道增加 normalizePresentationMetadata() 步骤 |
+| 16 | timeRange.end 和 dataSource.asOf 形成重复日期事实源 | timeRange.end=z.literal('data_as_of')，截止日期统一只来自 asOf |
+| 17 | MetricRef.label 和 Series.unit 未与 Registry 闭合 | Semantic Validator 新增 METRIC_LABEL_MISMATCH 和 SERIES_UNIT_MISMATCH |
+| 18 | rank_summary 仍保存独立 metric/label，可能与 transform 漂移 | rank_summary 改为 discriminated union，只有 transformRef + 可选 labelKey |
+| 19 | JSON Schema 导出用 fallback + as any hack，smoke test 不验约束 | z.toJSONSchema() 官方 API，A26 验证关键约束 |
+
+### Round 3 Gate
+
+```
+PATCH_PRESENTATION_CONSISTENCY=PASS (A19, A19b, A20 + Follow-up presentation assertions)
+TIME_RANGE_END_CONTRACT=PASS (A21)
+METRIC_METADATA_CLOSURE=PASS (A22, A23)
+RANK_INSIGHT_SINGLE_SOURCE=PASS (A24, A25)
+JSON_SCHEMA_NATIVE_EXPORT=PASS (A26 — z.toJSONSchema() 官方 API)
+
+ADVERSARIAL_REGRESSION_CASES=26/26 PASS (A1-A26)
+
+GOLDEN_CASES=5/5 PASS
+FOLLOWUP_CASES=5/5 PASS (含 presentation metadata 断言)
+NEGATIVE_CASES=9/9 PASS
+
+TYPECHECK=PASS (0 errors)
+TESTS=PASS (115/115)
+LINT=PASS (0 errors, 0 warnings)
+BUILD=PASS (268ms)
+
+P0_BLOCKERS=0
+P1_BLOCKERS=0
+
+SCHEMA_VERSION=1.0.0
+SCHEMA_FREEZE_CANDIDATE=YES
+```
+
+## 自审检查清单 (Round 2 + Round 3)
 
 | 检查项 | 结果 | 证据 |
 |--------|------|------|
@@ -103,3 +142,9 @@ SCHEMA_FREEZE_CANDIDATE=YES
 | Insight 与图表数据不一致 | ✅ | rank_summary 同源, A15-A16 |
 | Mock calendar 伪装真实 | ✅ | MOCK_WEEKDAY, foundation.test.ts |
 | Renderer 只验形状不验数据 | ✅ | hasFiniteValue, A14 |
+| Patch 后标题与结构状态不同步 | ✅ | normalizePresentationMetadata, A19-A20 |
+| timeRange.end 重复日期源 | ✅ | literal('data_as_of'), A21 |
+| MetricRef.label 未闭合 | ✅ | METRIC_LABEL_MISMATCH, A22 |
+| Series.unit 未闭合 | ✅ | SERIES_UNIT_MISMATCH, A23 |
+| rank_summary 仍可与 transform 漂移 | ✅ | discriminated union, A24-A25 |
+| JSON Schema 非官方导出 | ✅ | z.toJSONSchema(), A26 |

@@ -19,6 +19,8 @@ export type ErrorCode =
   | 'MISSING_TRANSFORM_REF'
   | 'MISSING_SERIES_FIELD'
   | 'METRIC_MARK_INCOMPATIBLE'
+  | 'METRIC_LABEL_MISMATCH'
+  | 'SERIES_UNIT_MISMATCH'
   | 'TIME_RANGE_EXCEEDS_DATA'
   | 'UNRESOLVED_PROVIDER'
   | 'EMPTY_DATA'
@@ -46,6 +48,8 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   INVALID_ENUM: '字段值不在允许范围内',
   DUPLICATE_ID: '存在重复的 ID',
   INVALID_UNIT: '指标单位与注册表不一致',
+  METRIC_LABEL_MISMATCH: '指标标签与注册表不一致',
+  SERIES_UNIT_MISMATCH: '序列单位与指标注册表不一致',
   MISSING_TRANSFORM_REF: '引用的变换不存在',
   MISSING_SERIES_FIELD: '序列引用的字段不存在',
   METRIC_MARK_INCOMPATIBLE: '该指标不支持指定的图表类型',

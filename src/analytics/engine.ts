@@ -147,19 +147,20 @@ export function computeInsight(spec: DashboardSpec, analytics: AnalyticsResult):
       }
       case 'rank_summary': {
         // MUST consume the same transform result as annotations — no independent re-sorting
-        if (fact.transformRef) {
-          const transformResult = analytics.transforms.get(fact.transformRef);
-          if (transformResult) {
-            rankResults.set(fact.transformRef, {
-              transformRef: fact.transformRef,
-              metric: fact.metric,
-              label: fact.label,
-              records: transformResult.records.map((r) => ({
-                date: r.date,
-                value: getField(r, fact.metric) ?? 0,
-              })),
-            });
-          }
+        // metric is derived from the referenced transform (single source of truth)
+        const transformResult = analytics.transforms.get(fact.transformRef);
+        if (transformResult) {
+          const transform = spec.transforms.find((t) => t.id === fact.transformRef);
+          const metricFromTransform = transform?.field ?? 'unknown';
+          rankResults.set(fact.transformRef, {
+            transformRef: fact.transformRef,
+            metric: metricFromTransform,
+            label: fact.labelKey ?? '',
+            records: transformResult.records.map((r) => ({
+              date: r.date,
+              value: getField(r, metricFromTransform) ?? 0,
+            })),
+          });
         }
         break;
       }

@@ -24,7 +24,7 @@ describe('Structural Validation', () => {
     const result = validateStructure({
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -39,7 +39,7 @@ describe('Structural Validation', () => {
     const result = validateStructure({
       schemaVersion: '2.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -53,7 +53,7 @@ describe('Structural Validation', () => {
     const result = validateStructure({
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -67,7 +67,7 @@ describe('Structural Validation', () => {
     const result = validateStructure({
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -81,7 +81,7 @@ describe('Structural Validation', () => {
     const result = validateStructure({
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: '2025-12-31' },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'auto', resolved: 'wencai', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],

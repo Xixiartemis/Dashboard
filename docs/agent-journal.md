@@ -174,3 +174,104 @@ npm run build        # success (257ms)
 | `src/fixtures/negative-cases.ts` | 适配新 schema |
 | `tests/adversarial.test.ts` | 新增 18 条 adversarial regression tests |
 | 其他 test 文件 | 适配新 schema |
+
+---
+
+## Round 3: 收口 — 消除剩余重复事实源和 Patch 后 presentation 漂移
+
+### 用户复核结论
+
+Round 2 的 14 个修复全部被认可。本轮只修 5 个阻塞正式冻结的问题。
+
+### 为什么"结构状态正确"不代表"用户看到的标题一定正确"
+
+Patch 操作（set_time_range、replace_metric、add_metric）只修改结构化状态：
+- `timeRange.count: 20 → 10`
+- `series.field: volume → change_pct`
+- `metrics[]` 新增 close
+
+但 `view.title` 和 `insight.intentSummary` 是独立的自由字符串。结构变了，字符串没变，用户看到的页面标题和实际数据就会不一致。这是 silent inconsistency — Schema 说 count=10 但标题写着"20个交易日"。
+
+**修复**: 在 `applyPatch()` 管道中增加 `normalizePresentationMetadata()` 步骤。结构状态改变后，标题和意图摘要从当前结构状态确定性派生。具体做法：
+- set_time_range: 用正则替换标题/意图摘要中的 "N个交易日" 的 N
+- replace_metric: 用旧指标中文标签替换为新指标中文标签
+- add_metric: 追加新指标标签到标题末尾
+- set_mark: 不改标题（用户设计决策，不要求标题包含图表类型）
+
+**为什么不用脆弱字符串操作**: 不是逐个手写 `replace("20", "10")`，而是用结构化的替换函数 `replaceTradingDayCount(text, newCount)` 和 `replaceMetricLabel(text, old, new)`。输入是结构化状态，输出是确定性文本。
+
+### 为什么 timeRange.end 和 dataSource.asOf 会形成重复日期事实源
+
+v1 的 Analytics 引擎始终取"最后 N 个交易日"（从数据集末尾往前截），并不使用 `timeRange.end` 来截取历史截止日期。但 Schema 允许 `end = "2024-01-01"` + `asOf = "2025-12-31"`，Validator 认为合法，实际数据仍然从 2025-12-31 往前取。两个字段声称控制同一件事但实际只有一方生效。
+
+**修复**: `timeRange.end` 收紧为 `z.literal('data_as_of')`。真实截止日期统一只来自 `dataSource.asOf`。`timeRange` 的语义变为："最近 N 个交易日，截至当前数据集 asOf"。不再存在两个日期事实源。
+
+### 为什么 Registry 是唯一事实来源意味着 label 和 unit 也必须闭合
+
+Round 2 已经验证 `metric.id`、`metric.kind`、`metric.unit` 与 Registry 一致。但 `MetricRef.label` 和 `Series.unit` 没有被校验。这意味着可以构造：
+- `metric.id = volume` + `metric.label = 收盘价` — 通过校验但页面显示错误标签
+- `series.field = volume` + `series.unit = CNY` — 通过校验但 Renderer 把成交量按人民币分配 Y 轴
+
+**修复**: 新增两个校验：
+- `MetricRef.label === MetricRegistry[id].label` → METRIC_LABEL_MISMATCH
+- `Series.unit === MetricRegistry[field].unit` → SERIES_UNIT_MISMATCH
+
+同时将之前用 `INVALID_UNIT` 覆盖 kind 不匹配的情况保留（kind 和 unit 都是"与注册表不一致"的语义）。
+
+### 为什么 rank_summary 再次保存 metric/limit/ranking label 就仍然可能和 transform 漂移
+
+Round 2 把 Insight ranking 改为引用 `transformRef`，这是对的。但 `rank_summary` 仍然同时保存 `metric` 和 `label` 作为独立字段。这意味着可以构造：
+- transform: `field=change_pct, order=asc, limit=3`
+- rank_summary: `metric=volume, label=成交量最大的5天, transformRef=worst_3_days`
+
+引用闭合了（transformRef 指向存在 transform），但语义仍然矛盾。`metric` 和 `label` 仍然可以自由填写，和 transform 的 `field`/`order`/`limit` 漂移。
+
+**修复**: `rank_summary` 改为 discriminated union，只有 `transformRef` + 可选 `labelKey`（纯展示提示，不改变业务语义）。`metric` 从 `transform.field` + Metric Registry 确定性生成。`order`/`limit` 从 transform 直接消费。`period_change` 保留 `metric` + `label`（因为它有自己的数据需求，不引用 transform）。
+
+### 为什么 JSON Schema smoke test 不等于 contract test
+
+Round 2 的 A18 只验证"返回了一个 object"且"title = DashboardSpec"。这不能证明 JSON Schema 和 Zod 同源。如果导出函数返回的是一个手写的简化对象（带 `note: "informational only"`），A18 照样通过。
+
+**修复**:
+1. JSON Schema 导出改用 Zod 4 官方 `z.toJSONSchema()` API，不再用 `(schema as any).jsonSchema?.()` + fallback
+2. 如果 API 调用失败，应该报错（测试失败），而不是静默返回简化对象
+3. A26 新增关键约束验证：`schemaVersion` const、`timeRange.end` 只允许 `data_as_of`、`mark` enum、`x.field` const、`x.type` const、`count` min/max
+
+### Adversarial Regression Tests (A19-A26)
+
+| 测试 | 覆盖 |
+|------|------|
+| A19 | set_time_range(20→10) 后 titles/intentSummary 不再包含"20个交易日" |
+| A19b | set_time_range(30→15) 后 titles 包含"15"不包含"30" |
+| A20 | replace_metric(volume→change_pct) 后 volume_view 标题包含"涨跌幅"不含"成交量" |
+| A21 | timeRange.end="2024-01-01" → structural FAIL |
+| A22 | metric.id=volume + label="收盘价" → METRIC_LABEL_MISMATCH |
+| A23 | series.field=volume + unit=CNY → SERIES_UNIT_MISMATCH |
+| A24 | rank_summary 含 metric 字段 → structural FAIL (discriminated union 拒绝) |
+| A25 | rank volume desc limit 4 → insight records = 4, metric 从 transform 派生 |
+| A26 | JSON Schema 含 schemaVersion const、data_as_of、mark enum、x literal、count min/max |
+
+### 实际运行的验证命令
+
+```bash
+npx tsc -b           # 0 errors
+npx vitest run       # 6 files, 115 tests, all passed
+npx oxlint src/ tests/ # 0 errors, 0 warnings
+npm run build        # success (268ms)
+```
+
+### 主要修改文件 (Round 3)
+
+| 文件 | 修改 |
+|------|------|
+| `src/schema/dashboard-spec.ts` | timeRange.end=z.literal('data_as_of'), InsightFact discriminated union (PeriodChangeFact + RankSummaryFact), z.toJSONSchema() 官方 API |
+| `src/validation/errors.ts` | 新增 METRIC_LABEL_MISMATCH, SERIES_UNIT_MISMATCH |
+| `src/validation/semantic.ts` | MetricRef.label 与 Registry 一致性, Series.unit 与 Registry 一致性, 适配 discriminated union insight facts |
+| `src/analytics/engine.ts` | rank_summary 从 transform 派生 metric, 不再从 fact.metric 读取 |
+| `src/patch/apply-patch.ts` | 新增 normalizePresentationMetadata() — replace_metric/add_metric/set_time_range 后更新 titles/intentSummary |
+| `src/fixtures/golden-cases.ts` | timeRange.end='data_as_of', rank_summary 只有 transformRef |
+| `src/fixtures/negative-cases.ts` | timeRange.end='data_as_of' |
+| `tests/adversarial.test.ts` | 新增 A19-A26 (8 条), 所有 rawInput 适配 data_as_of |
+| `tests/golden-and-negative.test.ts` | Follow-up patches 新增 presentation metadata 断言 |
+| `tests/validation.test.ts` | rawInput 适配 data_as_of |
+| `tests/renderer-probe.test.ts` | rawInput 适配 data_as_of |

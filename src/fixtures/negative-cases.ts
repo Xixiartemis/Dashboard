@@ -1,5 +1,9 @@
 /**
  * Negative Cases — 9 cases that must all be rejected.
+ *
+ * Updated for v1.0.0:
+ * - timeRange.end = 'data_as_of' (literal)
+ * - rank_summary facts: transformRef only (no metric/label)
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
@@ -18,7 +22,7 @@ export interface NegativeCase {
 
 const BASE_SPEC: Omit<DashboardSpec, 'schemaVersion' | 'dataSource'> = {
   instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: MANIFEST.asOf },
+  timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
   metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
   transforms: [],
   views: [{
@@ -74,7 +78,7 @@ export const NEGATIVE_CASES: NegativeCase[] = [
     rawInput: {
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 0, end: MANIFEST.asOf },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 0, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -91,7 +95,7 @@ export const NEGATIVE_CASES: NegativeCase[] = [
     rawInput: {
       schemaVersion: '1.0.0',
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: MANIFEST.asOf },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: 'data_as_of' },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
       dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
@@ -138,7 +142,7 @@ export const NEGATIVE_CASES: NegativeCase[] = [
     name: '时间范围超出数据能力',
     errorCode: 'TIME_RANGE_EXCEEDS_DATA',
     spec: makeSpec({
-      timeRange: { mode: 'relative', basis: 'trading_day', count: 100, end: MANIFEST.asOf },
+      timeRange: { mode: 'relative', basis: 'trading_day', count: 100, end: 'data_as_of' },
     }),
   },
 
