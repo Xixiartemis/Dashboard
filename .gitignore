@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Temporary import directories
+_ui_import/
+ai-stock-analysis-dashboard.zip

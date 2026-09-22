@@ -96,7 +96,7 @@ export const G2_SPEC: DashboardSpec = DS({
   ],
   insight: {
     intentSummary: '比较B公司最近20个交易日的开盘价和收盘价走势',
-    facts: [],
+    facts: [{ kind: 'period_change', metric: 'close', label: '收盘价' }],
   },
 });
 
@@ -203,7 +203,7 @@ export const G5_SPEC: DashboardSpec = DS({
   ],
   insight: {
     intentSummary: '分析A公司最近20个交易日的最高价和最低价走势',
-    facts: [],
+    facts: [{ kind: 'period_change', metric: 'high', label: '最高价' }],
   },
 });
 

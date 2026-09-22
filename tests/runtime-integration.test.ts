@@ -459,3 +459,56 @@ describe('RH8: Product runtime public surface', () => {
     expect(rt.controller).toBeDefined();
   });
 });
+
+// ── RS1-RS4: Snapshot Stability (P0 React integration fix) ───────────────
+
+describe('RS: Snapshot Stability', () => {
+  it('RS1: getState returns referentially stable snapshot when no mutation', () => {
+    const rt = createTestRuntime();
+    rt.controller.reset();
+    const a = rt.controller.getState();
+    const b = rt.controller.getState();
+    expect(a).toBe(b);
+  });
+
+  it('RS2: new snapshot after state change', async () => {
+    const rt = createTestRuntime();
+    rt.controller.reset();
+    const before = rt.controller.getState();
+    await rt.controller.submitCommand(GOLDEN_CASES[0].input);
+    const after = rt.controller.getState();
+    expect(after).not.toBe(before);
+  });
+
+  it('RS3: subscriber receives new stable snapshot on state change', async () => {
+    const rt = createTestRuntime();
+    rt.controller.reset();
+    const snapshots: DashboardControllerState[] = [];
+    const unsub = rt.controller.subscribe(() => {
+      snapshots.push(rt.controller.getState());
+    });
+    await rt.controller.submitCommand(GOLDEN_CASES[0].input);
+    unsub();
+    // All snapshots after mutation should be referentially different from each other
+    // (because state changes on each event)
+    // But getState within the same tick should return same ref
+    // At minimum, final snapshot should have lastSuccess
+    expect(snapshots.length).toBeGreaterThan(0);
+    const lastSnap = snapshots[snapshots.length - 1];
+    expect(lastSnap.lastSuccess).not.toBeNull();
+  });
+
+  it('RS4: reset changes snapshot, then stable again', async () => {
+    const rt = createTestRuntime();
+    rt.controller.reset();
+    await rt.controller.submitCommand(GOLDEN_CASES[0].input);
+    const beforeReset = rt.controller.getState();
+    rt.controller.reset();
+    const afterReset = rt.controller.getState();
+    expect(afterReset).not.toBe(beforeReset);
+    // After reset, consecutive getState calls return same ref
+    const a = rt.controller.getState();
+    const b = rt.controller.getState();
+    expect(a).toBe(b);
+  });
+});

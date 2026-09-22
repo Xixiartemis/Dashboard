@@ -191,14 +191,25 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
     }
   }
 
-  // ── 9. Build insight facts from rankings ──
+  // ── 9. Build insight facts ──
+  // Policy: if rankings exist → rank_summary facts
+  //         if no rankings → auto-select primary metric for period_change
+  //         Primary metric priority: close > open > high > low (skip volume/change_pct)
   const facts: DashboardSpec['insight']['facts'] = [];
-  if (intent.rankings) {
+  if (intent.rankings && intent.rankings.length > 0) {
     for (const ranking of intent.rankings) {
       facts.push({
         kind: 'rank_summary',
         transformRef: generateTransformId(ranking.metric, ranking.order, ranking.limit),
       });
+    }
+  } else {
+    // No ranking → add period_change for primary displayed metric
+    const PERIOD_CHANGE_PRIORITY = ['close', 'open', 'high', 'low'];
+    const primaryMetric = PERIOD_CHANGE_PRIORITY.find((m) => displayMetricIds.includes(m));
+    if (primaryMetric) {
+      const metricDef = getMetric(primaryMetric);
+      facts.push({ kind: 'period_change', metric: primaryMetric, label: metricDef?.label ?? primaryMetric });
     }
   }
 

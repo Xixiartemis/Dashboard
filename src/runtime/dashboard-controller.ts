@@ -109,7 +109,7 @@ export function createDashboardController(
 
   return {
     getState() {
-      return { ...state };
+      return state;
     },
 
     subscribe(listener: StateListener): () => void {
