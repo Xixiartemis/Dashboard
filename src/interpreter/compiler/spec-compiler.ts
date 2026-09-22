@@ -5,6 +5,11 @@
  * It uses: Registry (metadata), Policy (structure decisions), Intent (user's goal).
  *
  * Compiler does NOT parse natural language. It receives already-resolved canonical IDs.
+ *
+ * Invariant: compileInitialIntent(ok:true) means the intent is internally coherent
+ * AND the resulting spec satisfies all Compiler-checkable invariants.
+ * Downstream Validator should only catch things the Compiler cannot know
+ * (e.g. dataset availability).
  */
 
 import type { DashboardSpec, View, Transform, Annotation } from '../../schema/dashboard-spec';
@@ -44,43 +49,74 @@ export type CompileOutput = CompileResult | CompileFailure;
  * Deterministic: same input → same output. No randomness, no Date.now(), no LLM.
  */
 export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutput {
-  // ── Validate instrument ──
+  // ── 1. Validate instrument ──
   const inst = getInstrument(intent.instrument);
   if (!inst) {
     return { ok: false, error: makeInterpreterError('UNKNOWN_INSTRUMENT', `symbol=${intent.instrument}`) };
   }
 
-  // ── Validate metrics ──
+  // ── 2. Validate metrics: non-empty, all known, no duplicates ──
   if (intent.metrics.length === 0) {
     return { ok: false, error: makeInterpreterError('MISSING_METRICS') };
   }
 
-  const metricDefs = intent.metrics.map((id) => {
-    const def = getMetric(id);
-    if (!def) return null;
-    return def;
-  });
-
-  if (metricDefs.some((d) => d === null)) {
-    const badIds = intent.metrics.filter((id) => !getMetric(id));
-    return { ok: false, error: makeInterpreterError('UNKNOWN_METRIC', `ids=${badIds.join(',')}`) };
+  const metricSet = new Set<string>();
+  for (const id of intent.metrics) {
+    if (metricSet.has(id)) {
+      return { ok: false, error: makeInterpreterError('CONFLICTING_INTENT', `duplicate metric: ${id}`) };
+    }
+    metricSet.add(id);
+    if (!getMetric(id)) {
+      return { ok: false, error: makeInterpreterError('UNKNOWN_METRIC', `id=${id}`) };
+    }
   }
 
-  // ── Validate time range ──
+  // ── 3. Validate displayMetrics ──
+  const displayMetricIds = intent.displayMetrics ?? intent.metrics;
+  if (displayMetricIds.length === 0) {
+    return { ok: false, error: makeInterpreterError('MISSING_METRICS', 'displayMetrics is empty') };
+  }
+  const displaySet = new Set<string>();
+  for (const id of displayMetricIds) {
+    if (displaySet.has(id)) {
+      return { ok: false, error: makeInterpreterError('CONFLICTING_INTENT', `duplicate displayMetric: ${id}`) };
+    }
+    displaySet.add(id);
+    if (!metricSet.has(id)) {
+      return { ok: false, error: makeInterpreterError('CONFLICTING_INTENT', `displayMetric "${id}" not in metrics`) };
+    }
+  }
+
+  // ── 4. Validate time range ──
   if (intent.timeRange.count < 1 || intent.timeRange.count > 60) {
     return { ok: false, error: makeInterpreterError('OUT_OF_RANGE', `count=${intent.timeRange.count}`) };
   }
 
-  // ── Build MetricRef[] from Registry ──
+  // ── 5. Validate rankings: metric ∈ metrics, limit >= 1, no duplicate transform IDs ──
+  const transformIds = new Set<string>();
+  if (intent.rankings) {
+    for (const ranking of intent.rankings) {
+      if (!metricSet.has(ranking.metric)) {
+        return { ok: false, error: makeInterpreterError('CONFLICTING_INTENT', `ranking.metric "${ranking.metric}" not in metrics`) };
+      }
+      if (ranking.limit < 1) {
+        return { ok: false, error: makeInterpreterError('OUT_OF_RANGE', `ranking.limit=${ranking.limit}`) };
+      }
+      const tid = generateTransformId(ranking.metric, ranking.order, ranking.limit);
+      if (transformIds.has(tid)) {
+        return { ok: false, error: makeInterpreterError('CONFLICTING_INTENT', `duplicate transform: ${tid}`) };
+      }
+      transformIds.add(tid);
+    }
+  }
+
+  // ── 6. Build MetricRef[] from Registry ──
   const metrics = intent.metrics.map((id) => {
     const def = getMetric(id)!;
     return { id: def.id, label: def.label, kind: def.kind, unit: def.unit };
   });
 
-  // ── Determine display metrics (for views) vs analysis metrics (for closure) ──
-  const displayMetricIds = intent.displayMetrics ?? intent.metrics;
-
-  // ── Group display metrics by unit → views ──
+  // ── 7. Group display metrics by unit → views ──
   const groups = groupMetricsByUnit(displayMetricIds);
   const views: View[] = [];
 
@@ -105,11 +141,12 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
     if (intent.rankings) {
       for (const ranking of intent.rankings) {
         if (group.metricIds.includes(ranking.metric)) {
+          const tid = generateTransformId(ranking.metric, ranking.order, ranking.limit);
           viewAnnotations.push({
-            id: generateAnnotationId(generateTransformId(ranking.metric, ranking.order, ranking.limit)),
+            id: generateAnnotationId(tid),
             type: 'highlight',
-            transformRef: generateTransformId(ranking.metric, ranking.order, ranking.limit),
-            label: ranking.annotationLabel || getRankingAnnotationLabel(ranking.metric, ranking.order),
+            transformRef: tid,
+            label: getRankingAnnotationLabel(ranking.metric, ranking.order),
           });
         }
       }
@@ -119,13 +156,13 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
     // attach the annotation to the first view (the "primary" view)
     if (views.length === 0 && intent.rankings) {
       for (const ranking of intent.rankings) {
-        const inDisplay = displayMetricIds.includes(ranking.metric);
-        if (!inDisplay) {
+        if (!displaySet.has(ranking.metric)) {
+          const tid = generateTransformId(ranking.metric, ranking.order, ranking.limit);
           viewAnnotations.push({
-            id: generateAnnotationId(generateTransformId(ranking.metric, ranking.order, ranking.limit)),
+            id: generateAnnotationId(tid),
             type: 'highlight',
-            transformRef: generateTransformId(ranking.metric, ranking.order, ranking.limit),
-            label: ranking.annotationLabel || getRankingAnnotationLabel(ranking.metric, ranking.order),
+            transformRef: tid,
+            label: getRankingAnnotationLabel(ranking.metric, ranking.order),
           });
         }
       }
@@ -140,7 +177,7 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
     });
   }
 
-  // ── Build transforms from rankings ──
+  // ── 8. Build transforms from rankings ──
   const transforms: Transform[] = [];
   if (intent.rankings) {
     for (const ranking of intent.rankings) {
@@ -154,7 +191,7 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
     }
   }
 
-  // ── Build insight facts from rankings ──
+  // ── 9. Build insight facts from rankings ──
   const facts: DashboardSpec['insight']['facts'] = [];
   if (intent.rankings) {
     for (const ranking of intent.rankings) {
@@ -167,7 +204,7 @@ export function compileInitialIntent(intent: ResolvedInitialIntent): CompileOutp
 
   const metricLabels = intent.metrics.map((id) => getMetric(id)!.label);
 
-  // ── Assemble DashboardSpec ──
+  // ── 10. Assemble DashboardSpec ──
   const spec: DashboardSpec = {
     schemaVersion: '1.0.0',
     instrument: {

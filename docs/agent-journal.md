@@ -332,6 +332,33 @@ src/interpreter/
 └── index.ts               — Public exports
 ```
 
+---
+
+## Interpreter Core Contract Tightening
+
+### 1. RankingIntent 移除 annotationLabel
+
+RankingIntent 不再保存自由 annotationLabel 字段。标注标签由 `metric + order + Policy` 确定性派生（`getRankingAnnotationLabel()`）。消除了 ranking 文案第二事实源。
+
+### 2. compileInitialIntent 完整 invariant closure
+
+Compiler 现在验证所有 IR 内部引用关系：
+- metrics: 非空、全部 known、无 duplicate
+- displayMetrics: 非空、无 duplicate、全部属于 metrics
+- rankings: metric ∈ metrics、limit >= 1、无 duplicate transform ID
+- ok:true 意味着 intent 在 Compiler 可判断范围内 internally coherent
+
+### 3. compileFollowUpIntent context closure
+
+set_mark 现在验证：
+- viewId 存在
+- seriesId 存在于该 view 内（不是其他 view）
+- series.field 对应 metric 存在
+- requested mark 被该 metric 支持（via metricSupportsMark）
+
+replace_metric: 不能替换自身
+add_metric: metric 不能已在 spec 中
+
 ## Application Boundary Runtime Fix (v1.0.1)
 
 ### 问题

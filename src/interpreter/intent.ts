@@ -10,12 +10,13 @@
 import type { Mark } from '../schema/dashboard-spec';
 
 // ── Ranking Intent ────────────────────────────────────────────────────────
+// annotationLabel is NOT stored here — it's derived deterministically by Policy
+// from metric + order. No second truth source for ranking semantics.
 
 export interface RankingIntent {
   metric: string;       // canonical metric ID (e.g. 'change_pct')
   order: 'asc' | 'desc';
   limit: number;
-  annotationLabel: string; // e.g. '跌幅最大', '涨幅最大', '成交量最高'
 }
 
 // ── Initial Intent ────────────────────────────────────────────────────────
