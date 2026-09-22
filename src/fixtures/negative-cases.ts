@@ -1,8 +1,5 @@
 /**
  * Negative Cases — 9 cases that must all be rejected.
- *
- * Each case tests a specific validation failure path.
- * Error codes must match expected values.
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
@@ -14,11 +11,8 @@ export interface NegativeCase {
   id: string;
   name: string;
   errorCode: ErrorCode;
-  /** Raw JSON input that should fail structural validation */
   rawInput?: unknown;
-  /** Pre-built spec that should fail semantic validation */
   spec?: DashboardSpec;
-  /** Patch that should fail validation */
   patch?: { spec: DashboardSpec; patch: DashboardPatch };
 }
 
@@ -34,7 +28,7 @@ const BASE_SPEC: Omit<DashboardSpec, 'schemaVersion' | 'dataSource'> = {
     series: [{ id: 's1', field: 'close', mark: 'line', unit: 'CNY' }],
     annotations: [],
   }],
-  insight: { summary: 'test', facts: [] },
+  insight: { intentSummary: 'test', facts: [] },
 };
 
 function makeSpec(overrides: Partial<DashboardSpec> = {}): DashboardSpec {
@@ -82,10 +76,10 @@ export const NEGATIVE_CASES: NegativeCase[] = [
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
       timeRange: { mode: 'relative', basis: 'trading_day', count: 0, end: MANIFEST.asOf },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
-      dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: 'x', asOf: '2025-12-31', timezone: 'Asia/Shanghai', priceAdjustment: 'raw' },
+      dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
       views: [{ id: 'v1', title: 'T', x: { field: 'date', type: 'ordinal' }, series: [{ id: 's1', field: 'close', mark: 'line', unit: 'CNY' }], annotations: [] }],
-      insight: { summary: 't', facts: [] },
+      insight: { intentSummary: 't', facts: [] },
     },
   },
 
@@ -99,10 +93,10 @@ export const NEGATIVE_CASES: NegativeCase[] = [
       instrument: { symbol: 'MOCK.A', displayName: 'A公司', assetType: 'equity' },
       timeRange: { mode: 'relative', basis: 'trading_day', count: 30, end: MANIFEST.asOf },
       metrics: [{ id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' }],
-      dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: 'x', asOf: '2025-12-31', timezone: 'Asia/Shanghai', priceAdjustment: 'raw' },
+      dataSource: { preference: 'embedded_mock', resolved: 'embedded_mock', datasetId: MANIFEST.datasetId, asOf: MANIFEST.asOf, timezone: MANIFEST.timezone, priceAdjustment: 'raw' },
       transforms: [],
       views: [{ id: 'v1', title: 'T', x: { field: 'date', type: 'ordinal' }, series: [{ id: 's1', field: 'close', mark: 'pie', unit: 'CNY' }], annotations: [] }],
-      insight: { summary: 't', facts: [] },
+      insight: { intentSummary: 't', facts: [] },
     },
   },
 
@@ -159,7 +153,7 @@ export const NEGATIVE_CASES: NegativeCase[] = [
     },
   },
 
-  // N9: add_metric to non-existent view — caught by patch semantic validation
+  // N9: add_metric to non-existent view
   {
     id: 'N9',
     name: 'Patch后生成非法Schema',

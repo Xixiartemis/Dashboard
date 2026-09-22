@@ -1,13 +1,14 @@
 # Agent Journal — DashboardSpec v1.0 Phase 0
 
-## 1. 用户目标和约束
+## Round 1: Initial Implementation
+
+### 用户目标和约束
 
 - 目标: 建立"自然语言生成股票分析看板"的核心数据契约（DashboardSpec v1.0）
 - 约束: 确定性、可复现、不依赖真实行情接口、不依赖运行时 LLM、不依赖当天日期
 - 范围: Mock Dataset + Registries + Schema + Validators + Analytics + Renderer Probe + Tests + Docs
-- 不做: 完整 Interpreter、React 页面、ECharts 图表页面
 
-## 2. 参考过的资料
+### 参考过的资料
 
 | 来源 | 用途 |
 |------|------|
@@ -19,136 +20,157 @@
 
 详见 `docs/design-references.md`。
 
-## 3. 重要设计选择
+### 重要设计选择
 
-### 3.1 metrics vs views[].series[] 职责分离
+1. **metrics vs views[].series[] 职责分离**: metrics = 分析依赖，series = 实际展示
+2. **change_pct 先算后截**: 完整80日 series → 计算 change_pct → 截取最近N天
+3. **Zod strict mode**: 拒绝未知字段
+4. **DashboardPatch 领域语义**: 四种操作，不用 RFC 6902
+5. **Renderer Contract Probe**: 验证 Schema 可被 ECharts 消费
 
-**选择**: `metrics` = 分析依赖集合，`views[].series[]` = 实际展示。
+### Round 1 自审发现
 
-**为什么**: 用户说"标出跌幅最大的3天"时，change_pct 必须在 metrics 中（供 transform 引用），但不一定直接画到图上。如果 metrics = 展示，就无法表达这种"隐式依赖"。
+1. replace_metric 产生重复 metric id → 已修复
+2. Zod v4 用 `invalid_value` 代替 `invalid_enum_value` → 已修复
+3. Zod v4 invalid_type 无 received 属性 → 已修复
 
-**拒绝的方案**: metrics = 页面展示指标。会导致 transform 无法引用未展示的指标。
+---
 
-### 3.2 change_pct 计算顺序
+## Round 2: Contract Tightening (独立审计后)
 
-**选择**: 完整80日 raw series → 计算 change_pct → 截取最近N天。
+### 用户独立审计发现的问题
 
-**为什么**: 如果先截取30天再计算 change_pct，第1天的前一交易日 close 会丢失，导致该天 change_pct = 0 或计算错误。真正跌幅最大的交易日可能被漏掉。
+用户从"Schema 允许什么状态"和"系统实际能不能正确处理这些状态"的角度做了对抗性审查，发现多处 Schema 比实现宣称能力更宽的情况。这不是功能缺失，而是 Validator 会认为合法但系统实际可能静默使用错误数据。
 
-**拒绝的方案**: 先截取再计算。这是最常见的实现错误。
+### 修复清单
 
-**回归测试**: `analytics.test.ts > Time range and change_pct interaction > change_pct on first day of 30-day window uses previous day close`
+#### Issue #2: DataSource 必须和真实执行数据一致
 
-### 3.3 Zod strict mode
+**问题**: Schema 允许 `resolved=wencai`、任意 datasetId/asOf/timezone、`priceAdjustment=adjusted`，但 runAnalytics() 实际只读 embedded mock。页面可能显示"问财/adjusted"但实际画的是本地 mock raw 数据。
 
-**选择**: 所有 schema 使用 `.strict()`，拒绝未知字段。
+**修复**:
+- `resolved` 收紧为 `z.literal('embedded_mock')`
+- `priceAdjustment` 收紧为 `z.literal('raw')`
+- Semantic Validator 检查 datasetId/asOf/timezone 与 MANIFEST 一致
 
-**为什么**: 防止 schema 漂移。如果允许未知字段通过，Renderer 可能依赖未定义的行为。
+**为什么不提前开放 wencai**: Provider 没接入前，Schema 允许 = 静默数据错配。等真正接入再显式扩展。
 
-### 3.4 DashboardPatch 领域语义
+#### Issue #3: metrics 必须真正成为 dependency closure
 
-**选择**: 四种领域 Patch 操作（replace_metric, add_metric, set_time_range, set_mark），不用 RFC 6902。
+**问题**: semantic.ts 默认把所有 raw 字段 (open/high/low/close/volume) 视为 available，即使 metrics 只声明了 close。这导致 `metrics=[close]` + `series.field=volume` 能通过校验。
 
-**为什么**: RFC 6902 是通用 JSON Patch，无法保证 Patch 后的 Schema 仍然满足业务不变量。领域 Patch 可以在应用前做语义检查。
+**修复**: series.field、transform.field、insight.metric 都必须 ∈ spec.metrics[]。唯一例外是 `date`（x-axis 字段，不属于 Metric Registry）。
 
-### 3.5 单位语义
+#### Issue #4: x-axis 收紧
 
-**选择**: `5.2` 代表 `5.2%`，不是 `0.052`。
+**问题**: Schema 允许 `x.field=close`、`x.type=linear`，但 Renderer 实际固定使用 date + category axis。
 
-**为什么**: 金融领域约定俗成，避免 UI 层再做 ×100 转换。
+**修复**: `AxisSchema.field = z.literal('date')`，`AxisSchema.type = z.literal('ordinal')`。
 
-### 3.6 Renderer Contract Probe
+**为什么**: 不为"看起来通用"保留虚假扩展性。v1 所有图表都是交易日→指标值。
 
-**选择**: 实现最小 ECharts option 编译器，验证 Schema 可被消费。
+#### Issue #5: Series 全 null 检查
 
-**为什么**: 防止"Schema Test 全 PASS → 开始写 ECharts → 才发现 Schema 不好映射"的问题。
+**问题**: validateEChartsOption() 只检查形状，不检查数据有效性。全 null 数据也算通过。
 
-### 3.7 Metamorphic Fixtures
+**修复**: Renderer Probe 增加 `hasFiniteValue` 检查。series data 至少一个 finite number。
 
-**选择**: Phase 0 只建立 fixture，不执行 metamorphic test。
+#### Issue #6: summary → intentSummary
 
-**为什么**: 没有 Interpreter 时无法真正测试自然语言变体的等价性。提前建立 fixture 为下一阶段做准备。
+**问题**: `summary` 是自由字符串，Interpreter 可以写"A公司下跌20%"即使实际是+6.3%。
 
-## 4. 实际发现的设计缺陷
+**修复**: 改名为 `intentSummary`，明确只能表达用户分析意图，不能表达计算结果。真正数值结论由 `DashboardSpec + AnalyticsResult → InsightResult` 产生。
 
-### 4.1 replace_metric 重复指标
+#### Issue #7: Insight ranking 与 Transform 同源
 
-**原设计**: replace_metric 总是将 `from` 替换为 `to`。
+**问题**: annotation 用 transform (limit=3)，但 computeInsight() 里 worst_days 固定 slice(0,3)，max_volume_days 固定 slice(0,5)。两套独立排序逻辑。
 
-**反例**: G1 的 metrics 已包含 `change_pct`（供 transform 使用）。当 Patch 把 `volume` 替换为 `change_pct` 时，会产生重复的 `change_pct` 条目。
+**修复**: 引入 `rank_summary` insight kind + `transformRef`。Insight 消费与 Annotation 完全相同的 transform 结果。limit、排序字段、order 只有一个事实来源。
 
-**破坏的不变量**: metrics 中 id 必须唯一（semantic validation 中的 DUPLICATE_ID 检查）。
+#### Issue #8: 删除 min_volume_days
 
-**修复**: 在 applyPatch 中检查 `to` 是否已存在，如果存在则只移除 `from`。
+**问题**: Schema 允许但 Analytics 没有实现。
 
-**测试**: `golden-and-negative.test.ts > G1 follow-up > metrics should have no duplicates`
+**修复**: 从 InsightFactKindSchema 删除。Schema 不声明当前系统无法执行的能力。
 
-### 4.2 Zod v4 错误码变更
+#### Issue #9: Zod JSON Schema 导出
 
-**原设计**: 结构校验映射 `invalid_enum_value` → INVALID_ENUM。
+**问题**: 声明"Zod 是唯一事实来源"但 getDashboardSpecJsonSchema() 手写了一整套 JSON Schema。两份 Contract。
 
-**反例**: Zod v4 使用 `invalid_value` 代替 `invalid_enum_value`。
+**修复**: 改用 Zod 的原生 JSON Schema 导出。如果不可用则返回标记 `_sourceOfTruth: DashboardSpecSchema (Zod)`。
 
-**破坏的不变量**: N4 测试（不支持的图表类型）无法正确映射错误码。
+#### Issue #10: schemaVersion 收紧为 literal
 
-**修复**: 更新 structural.ts 中的错误码映射，同时兼容 `invalid_enum_value` 和 `invalid_value`。
+**问题**: `schemaVersion: string` 允许 "abc"、"2.5" 通过。
 
-**测试**: `validation.test.ts > N4: unsupported mark rejected by Zod`
+**修复**: `z.literal('1.0.0')`。以后升级版本做显式迁移。
 
-### 4.3 Zod v4 invalid_type 缺少 received 属性
+#### Issue #11: Instrument metadata 一致性
 
-**原设计**: 结构校验通过 `issue.received` 判断是缺失字段还是类型错误。
+**问题**: `symbol=MOCK.A` + `displayName=B公司` + `assetType=crypto` 能通过。Registry 不是唯一事实来源。
 
-**反例**: Zod v4 的 `$ZodIssueInvalidType` 没有 `received` 属性。
+**修复**: Semantic Validator 检查 displayName 和 assetType 与 Registry 一致。
 
-**修复**: 简化 structural.ts，直接使用 `issue.message` 传递类型错误详情，不再尝试区分缺失 vs 类型错误。
+#### Issue #12: calendar 改为 MOCK_WEEKDAY
 
-## 5. 实际运行的验证命令
+**问题**: Manifest 标 `calendar=SSE` 但只排除周末，没有处理中国法定节假日。
+
+**修复**: 改为 `MOCK_WEEKDAY`，注释说明"仅排除周末，不代表真实 SSE 交易日历"。
+
+#### Issue #13: 真实 ECharts 类型
+
+**问题**: Renderer Probe 用自己定义的 EChartsOption interface，没有真实 ECharts 依赖。
+
+**修复**: 加入 `echarts` 依赖，使用官方 `EChartsOption` 和 `SeriesOption` 类型。
+
+#### Issue #14: 多单位 Y 轴
+
+**问题**: CNY → axis 0, 非CNY → axis 1。三个不同单位会合并到一个轴。
+
+**修复**: 每个 distinct unit 创建独立 Y axis。series 根据 unit 绑定对应 axis index。
+
+### Adversarial Regression Tests (A1-A18)
+
+| 测试 | 覆盖 |
+|------|------|
+| A1 | resolved=wencai → structural FAIL |
+| A2 | datasetId 不匹配 MANIFEST → semantic FAIL |
+| A3 | asOf 不匹配 → semantic FAIL |
+| A4 | timezone 不匹配 → semantic FAIL |
+| A5 | priceAdjustment=adjusted → structural FAIL |
+| A6 | metrics 不含 volume, series 用 volume → FAIL |
+| A7 | metrics 不含 volume, transform 用 volume → FAIL |
+| A8 | metrics 不含 volume, insight 用 volume → FAIL |
+| A9 | x.field=close → structural FAIL |
+| A10 | x.type=linear → structural FAIL |
+| A11 | MOCK.A + displayName=B公司 → FAIL |
+| A12 | MOCK.A + assetType=crypto → FAIL |
+| A13 | schemaVersion=abc → structural FAIL |
+| A14 | series 全 NaN → renderer FAIL |
+| A15 | ranking insight records count = transform limit |
+| A16 | ranking insight records = transform records (同源) |
+| A17 | 3 单位 → 3 Y axis |
+| A18 | JSON Schema 导出可用 |
+
+### 实际运行的验证命令
 
 ```bash
-# Typecheck
-npx tsc -b
-# 结果: 0 errors
-
-# Tests
-npx vitest run
-# 结果: 5 files, 99 tests, all passed
-
-# Lint
-npx oxlint src/ tests/
-# 结果: 0 errors, 0 warnings
-
-# Build
-npm run build
-# 结果: success (446ms)
+npx tsc -b           # 0 errors
+npx vitest run       # 6 files, 106 tests, all passed
+npx oxlint src/ tests/ # 0 errors, 0 warnings
+npm run build        # success (257ms)
 ```
 
-## 6. 主要修改文件
+### 主要修改文件 (Round 2)
 
-| 文件 | 用途 |
+| 文件 | 修改 |
 |------|------|
-| `src/registries/instruments.ts` | Instrument Registry |
-| `src/registries/metrics.ts` | Metric Registry |
-| `src/data/manifest.ts` | Dataset Manifest |
-| `src/data/mock-dataset.ts` | Mock OHLCV 数据 (80 天 × 2 股票) |
-| `src/data/invariants.ts` | 数据不变量校验 |
-| `src/schema/dashboard-spec.ts` | DashboardSpec Zod Schema + JSON Schema |
-| `src/schema/dashboard-patch.ts` | DashboardPatch Zod Schema |
-| `src/validation/errors.ts` | 错误码和中文消息 |
-| `src/validation/structural.ts` | 结构校验 |
-| `src/validation/semantic.ts` | 语义校验 |
-| `src/analytics/engine.ts` | 分析引擎 (change_pct, rank, insight) |
-| `src/patch/apply-patch.ts` | Patch 应用 + 重新校验 |
-| `src/renderer/echarts-probe.ts` | Renderer Contract Probe |
-| `src/fixtures/golden-cases.ts` | 5 Golden + 5 Follow-up Cases |
-| `src/fixtures/negative-cases.ts` | 9 Negative Cases |
-| `src/fixtures/metamorphic.ts` | Metamorphic Fixtures |
-| `tests/foundation.test.ts` | Dataset + Registry 测试 |
-| `tests/validation.test.ts` | Schema + Validation 测试 |
-| `tests/analytics.test.ts` | Analytics 引擎测试 |
-| `tests/golden-and-negative.test.ts` | Golden/Negative/Patch 测试 |
-| `tests/renderer-probe.test.ts` | Renderer Contract Probe 测试 |
-| `docs/design-references.md` | 设计参考调研 |
-| `docs/requirements-matrix.md` | 需求映射矩阵 |
-| `docs/agent-journal.md` | 本文档 |
-| `docs/schema-freeze-report.md` | Schema Freeze 报告 |
+| `src/schema/dashboard-spec.ts` | schemaVersion literal, x-axis literal, intentSummary, rank_summary, 删除 min_volume_days, JSON Schema 导出 |
+| `src/validation/semantic.ts` | DataSource provenance, metric dependency closure, instrument metadata, insight transformRef |
+| `src/data/manifest.ts` | calendar → MOCK_WEEKDAY |
+| `src/analytics/engine.ts` | insight ranking 消费 transform 结果 |
+| `src/renderer/echarts-probe.ts` | 真实 ECharts 类型, 多 unit Y 轴, null 数据检查 |
+| `src/fixtures/golden-cases.ts` | 适配新 schema |
+| `src/fixtures/negative-cases.ts` | 适配新 schema |
+| `tests/adversarial.test.ts` | 新增 18 条 adversarial regression tests |
+| 其他 test 文件 | 适配新 schema |

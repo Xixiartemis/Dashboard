@@ -2,14 +2,16 @@
  * Semantic Validation — validates business-level correctness of a DashboardSpec.
  *
  * Precondition: input has already passed structural validation.
- * Checks: registry membership, reference closure, data capability, mark compatibility.
+ * Checks: registry membership, reference closure, data capability, mark compatibility,
+ * datasource provenance, metric dependency closure, instrument metadata consistency.
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
 import type { DashboardPatch } from '../schema/dashboard-patch';
-import { isKnownSymbol } from '../registries/instruments';
+import { getInstrument } from '../registries/instruments';
 import { isKnownMetric, getMetric, metricSupportsMark } from '../registries/metrics';
 import { getDataset } from '../data/mock-dataset';
+import { MANIFEST } from '../data/manifest';
 import { type ValidationError, makeError } from './errors';
 
 export interface SemanticResult {
@@ -26,17 +28,47 @@ export type SemanticValidation = SemanticResult | SemanticFailure;
 export function validateSemantics(spec: DashboardSpec): SemanticValidation {
   const errors: ValidationError[] = [];
 
-  // 1. Instrument exists in registry
-  if (!isKnownSymbol(spec.instrument.symbol)) {
-    errors.push(makeError('UNKNOWN_INSTRUMENT', 'instrument.symbol', `symbol=${spec.instrument.symbol}`));
+  // ── 1. DataSource provenance (Issue #2) ───────────────────────────────
+  if (spec.dataSource.datasetId !== MANIFEST.datasetId) {
+    errors.push(makeError('UNRESOLVED_PROVIDER', 'dataSource.datasetId',
+      `expected ${MANIFEST.datasetId}, got ${spec.dataSource.datasetId}`));
+  }
+  if (spec.dataSource.asOf !== MANIFEST.asOf) {
+    errors.push(makeError('UNRESOLVED_PROVIDER', 'dataSource.asOf',
+      `expected ${MANIFEST.asOf}, got ${spec.dataSource.asOf}`));
+  }
+  if (spec.dataSource.timezone !== MANIFEST.timezone) {
+    errors.push(makeError('UNRESOLVED_PROVIDER', 'dataSource.timezone',
+      `expected ${MANIFEST.timezone}, got ${spec.dataSource.timezone}`));
   }
 
-  // 2. All metric ids from registry
+  // ── 2. Instrument exists AND metadata matches registry (Issue #11) ────
+  const inst = getInstrument(spec.instrument.symbol);
+  if (!inst) {
+    errors.push(makeError('UNKNOWN_INSTRUMENT', 'instrument.symbol', `symbol=${spec.instrument.symbol}`));
+  } else {
+    if (spec.instrument.displayName !== inst.displayName) {
+      errors.push(makeError('UNKNOWN_INSTRUMENT', 'instrument.displayName',
+        `expected "${inst.displayName}", got "${spec.instrument.displayName}"`));
+    }
+    if (spec.instrument.assetType !== inst.assetType) {
+      errors.push(makeError('UNKNOWN_INSTRUMENT', 'instrument.assetType',
+        `expected "${inst.assetType}", got "${spec.instrument.assetType}"`));
+    }
+  }
+
+  // ── 3. Metric dependency closure (Issue #3) ───────────────────────────
+  // All business metric references must be in spec.metrics
+  const metricIds = new Set<string>();
   for (const m of spec.metrics) {
+    if (metricIds.has(m.id)) {
+      errors.push(makeError('DUPLICATE_ID', 'metrics', `duplicate metric: ${m.id}`));
+    }
+    metricIds.add(m.id);
+    // Check against registry
     if (!isKnownMetric(m.id)) {
       errors.push(makeError('UNSUPPORTED_METRIC', 'metrics', `metric=${m.id}`));
     } else {
-      // Check unit consistency
       const def = getMetric(m.id)!;
       if (m.unit !== def.unit) {
         errors.push(makeError('INVALID_UNIT', `metrics[${m.id}]`, `expected ${def.unit}, got ${m.unit}`));
@@ -47,16 +79,7 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
     }
   }
 
-  // 3. All metric ids unique
-  const metricIds = new Set<string>();
-  for (const m of spec.metrics) {
-    if (metricIds.has(m.id)) {
-      errors.push(makeError('DUPLICATE_ID', 'metrics', `duplicate metric: ${m.id}`));
-    }
-    metricIds.add(m.id);
-  }
-
-  // 4. All view ids unique
+  // ── 4. All view ids unique ────────────────────────────────────────────
   const viewIds = new Set<string>();
   for (const v of spec.views) {
     if (viewIds.has(v.id)) {
@@ -65,7 +88,7 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
     viewIds.add(v.id);
   }
 
-  // 5. All series ids unique within each view
+  // ── 5. Series ids unique within each view ─────────────────────────────
   for (const v of spec.views) {
     const seriesIds = new Set<string>();
     for (const s of v.series) {
@@ -76,51 +99,64 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
     }
   }
 
-  // 6. Build available field set: raw fields + metric ids
-  const availableFields = new Set<string>(['date', 'open', 'high', 'low', 'close', 'volume']);
-  for (const m of spec.metrics) {
-    availableFields.add(m.id);
-  }
-
-  // 7. Series.field exists in available fields
+  // ── 6. series.field must be in spec.metrics ───────────────────────────
   for (const v of spec.views) {
     for (const s of v.series) {
-      if (!availableFields.has(s.field)) {
-        errors.push(makeError('MISSING_SERIES_FIELD', `views[${v.id}].series[${s.id}]`, `field=${s.field}`));
+      if (!metricIds.has(s.field)) {
+        errors.push(makeError('MISSING_SERIES_FIELD', `views[${v.id}].series[${s.id}]`,
+          `field="${s.field}" not in spec.metrics (metrics=analysis dependency closure)`));
       }
       // Check mark compatibility
       if (isKnownMetric(s.field) && !metricSupportsMark(s.field, s.mark)) {
-        errors.push(makeError('METRIC_MARK_INCOMPATIBLE', `views[${v.id}].series[${s.id}]`, `${s.field} does not support ${s.mark}`));
+        errors.push(makeError('METRIC_MARK_INCOMPATIBLE', `views[${v.id}].series[${s.id}]`,
+          `${s.field} does not support ${s.mark}`));
       }
     }
   }
 
-  // 8. Transform fields exist
+  // ── 7. transform.field must be in spec.metrics ────────────────────────
   for (const t of spec.transforms) {
-    if (!availableFields.has(t.field)) {
-      errors.push(makeError('MISSING_SERIES_FIELD', `transforms[${t.id}]`, `field=${t.field}`));
+    if (!metricIds.has(t.field)) {
+      errors.push(makeError('MISSING_SERIES_FIELD', `transforms[${t.id}]`,
+        `field="${t.field}" not in spec.metrics`));
     }
   }
 
-  // 9. Annotation transformRef closure
+  // ── 8. Annotation transformRef closure ────────────────────────────────
   const transformIds = new Set(spec.transforms.map((t) => t.id));
   for (const v of spec.views) {
     for (const a of v.annotations) {
       if (!transformIds.has(a.transformRef)) {
-        errors.push(makeError('MISSING_TRANSFORM_REF', `views[${v.id}].annotations[${a.id}]`, `transformRef=${a.transformRef}`));
+        errors.push(makeError('MISSING_TRANSFORM_REF', `views[${v.id}].annotations[${a.id}]`,
+          `transformRef=${a.transformRef}`));
       }
     }
   }
 
-  // 10. Time range doesn't exceed data capability
-  const dataset = getDataset(spec.instrument.symbol);
-  if (dataset && spec.timeRange.count > dataset.length) {
-    errors.push(makeError('TIME_RANGE_EXCEEDS_DATA', 'timeRange.count', `requested=${spec.timeRange.count}, available=${dataset.length}`));
+  // ── 9. Insight facts consistency ──────────────────────────────────────
+  for (const fact of spec.insight.facts) {
+    // insight.metric must be in spec.metrics
+    if (!metricIds.has(fact.metric)) {
+      errors.push(makeError('MISSING_SERIES_FIELD', `insight.facts`,
+        `metric="${fact.metric}" not in spec.metrics`));
+    }
+    // rank_summary must reference a valid transform
+    if (fact.kind === 'rank_summary') {
+      if (!fact.transformRef) {
+        errors.push(makeError('MISSING_TRANSFORM_REF', `insight.facts`,
+          `rank_summary requires transformRef`));
+      } else if (!transformIds.has(fact.transformRef)) {
+        errors.push(makeError('MISSING_TRANSFORM_REF', `insight.facts`,
+          `transformRef=${fact.transformRef} not in transforms`));
+      }
+    }
   }
 
-  // 11. Resolved provider is known
-  if (spec.dataSource.resolved !== 'embedded_mock' && spec.dataSource.resolved !== 'wencai') {
-    errors.push(makeError('UNRESOLVED_PROVIDER', 'dataSource.resolved', `resolved=${spec.dataSource.resolved}`));
+  // ── 10. Time range doesn't exceed data capability ─────────────────────
+  const dataset = getDataset(spec.instrument.symbol);
+  if (dataset && spec.timeRange.count > dataset.length) {
+    errors.push(makeError('TIME_RANGE_EXCEEDS_DATA', 'timeRange.count',
+      `requested=${spec.timeRange.count}, available=${dataset.length}`));
   }
 
   if (errors.length > 0) {
@@ -131,7 +167,6 @@ export function validateSemantics(spec: DashboardSpec): SemanticValidation {
 
 /**
  * Validate that a patch is applicable to the current spec.
- * Checks: from-metric exists, to-metric from registry, target view/series exist.
  */
 export function validatePatchSemantics(
   spec: DashboardSpec,
@@ -161,10 +196,10 @@ export function validatePatchSemantics(
       break;
     }
     case 'set_time_range': {
-      // count range already validated by Zod; check against data
       const dataset = getDataset(spec.instrument.symbol);
       if (dataset && patch.count > dataset.length) {
-        errors.push(makeError('TIME_RANGE_EXCEEDS_DATA', 'count', `requested=${patch.count}, available=${dataset.length}`));
+        errors.push(makeError('TIME_RANGE_EXCEEDS_DATA', 'count',
+          `requested=${patch.count}, available=${dataset.length}`));
       }
       break;
     }
@@ -177,7 +212,8 @@ export function validatePatchSemantics(
         if (!series) {
           errors.push(makeError('PATCH_TARGET_NOT_FOUND', 'seriesId', `series=${patch.seriesId}`));
         } else if (isKnownMetric(series.field) && !metricSupportsMark(series.field, patch.mark)) {
-          errors.push(makeError('METRIC_MARK_INCOMPATIBLE', 'mark', `${series.field} does not support ${patch.mark}`));
+          errors.push(makeError('METRIC_MARK_INCOMPATIBLE', 'mark',
+            `${series.field} does not support ${patch.mark}`));
         }
       }
       break;

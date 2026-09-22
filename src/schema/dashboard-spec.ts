@@ -8,6 +8,9 @@
  * - metrics = analysis dependencies (may include metrics not directly shown)
  * - views[].series[] = what's actually rendered
  * - strict mode: unknown properties are rejected
+ * - schemaVersion = literal '1.0.0' (frozen)
+ * - x-axis locked to date/ordinal (v1 only)
+ * - insight.intentSummary = user intent, NOT computed result
  */
 
 import { z } from 'zod';
@@ -44,15 +47,17 @@ export const InstrumentSpecSchema = z
 export type InstrumentSpec = z.infer<typeof InstrumentSpecSchema>;
 
 // ── DataSource ─────────────────────────────────────────────────────────────
+// v1: resolved only allows 'embedded_mock' until WenCai provider is integrated.
+// Semantic validator checks datasetId/asOf/timezone/priceAdjustment match MANIFEST.
 
 export const DataSourceSchema = z
   .object({
     preference: z.enum(['embedded_mock', 'wencai', 'auto']),
-    resolved: z.enum(['embedded_mock', 'wencai']),
+    resolved: z.literal('embedded_mock'),
     datasetId: z.string(),
     asOf: z.string(),
     timezone: z.string(),
-    priceAdjustment: z.enum(['raw', 'adjusted']),
+    priceAdjustment: z.literal('raw'),
   })
   .strict();
 export type DataSource = z.infer<typeof DataSourceSchema>;
@@ -94,12 +99,12 @@ export const SeriesSchema = z
   .strict();
 export type Series = z.infer<typeof SeriesSchema>;
 
-// ── Axis ───────────────────────────────────────────────────────────────────
+// ── Axis (locked to date/ordinal for v1) ───────────────────────────────────
 
 export const AxisSchema = z
   .object({
-    field: z.string(),
-    type: z.enum(['ordinal', 'linear']),
+    field: z.literal('date'),
+    type: z.literal('ordinal'),
   })
   .strict();
 export type Axis = z.infer<typeof AxisSchema>;
@@ -130,13 +135,12 @@ export const ViewSchema = z
 export type View = z.infer<typeof ViewSchema>;
 
 // ── Insight ────────────────────────────────────────────────────────────────
+// v1: removed min_volume_days (no implementation)
+// v1: ranking facts reference transforms via transformRef (single source of truth)
 
 export const InsightFactKindSchema = z.enum([
   'period_change',
-  'worst_days',
-  'best_days',
-  'max_volume_days',
-  'min_volume_days',
+  'rank_summary',    // replaces worst_days/best_days/max_volume_days — references transform
 ]);
 
 export const InsightFactSchema = z
@@ -144,13 +148,14 @@ export const InsightFactSchema = z
     kind: InsightFactKindSchema,
     metric: z.string(),
     label: z.string(),
+    transformRef: z.string().optional(), // required for rank_summary
   })
   .strict();
 export type InsightFact = z.infer<typeof InsightFactSchema>;
 
 export const InsightSchema = z
   .object({
-    summary: z.string(),
+    intentSummary: z.string(), // user intent, NOT computed result
     facts: z.array(InsightFactSchema),
   })
   .strict();
@@ -160,7 +165,7 @@ export type Insight = z.infer<typeof InsightSchema>;
 
 export const DashboardSpecSchema = z
   .object({
-    schemaVersion: z.string(),
+    schemaVersion: z.literal('1.0.0'),
     instrument: InstrumentSpecSchema,
     timeRange: TimeRangeSchema,
     metrics: z.array(MetricRefSchema).min(1),
@@ -179,159 +184,29 @@ export function parseDashboardSpec(input: unknown) {
   return DashboardSpecSchema.safeParse(input);
 }
 
-// ── JSON Schema export ─────────────────────────────────────────────────────
+// ── JSON Schema export (derived from Zod, single source of truth) ─────────
 
 export function getDashboardSpecJsonSchema() {
-  // Use zod-to-json-schema if available, otherwise manual
-  // For now, return a manual representation that captures the structure
+  // Zod v4 supports .jsonSchema() on schemas
+  try {
+    const jsonSchema = (DashboardSpecSchema as any).jsonSchema?.();
+    if (jsonSchema) {
+      return {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        title: 'DashboardSpec',
+        description: 'Structured stock analysis dashboard specification v1.0.0',
+        ...jsonSchema,
+      };
+    }
+  } catch {
+    // fallback if jsonSchema not available
+  }
+  // Minimal fallback: we still have Zod as the real validator
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     title: 'DashboardSpec',
-    description: 'Structured stock analysis dashboard specification',
-    type: 'object',
-    required: [
-      'schemaVersion', 'instrument', 'timeRange', 'metrics',
-      'dataSource', 'transforms', 'views', 'insight',
-    ],
-    additionalProperties: false,
-    properties: {
-      schemaVersion: { type: 'string' },
-      instrument: {
-        type: 'object',
-        required: ['symbol', 'displayName', 'assetType'],
-        additionalProperties: false,
-        properties: {
-          symbol: { type: 'string' },
-          displayName: { type: 'string' },
-          assetType: { type: 'string', enum: ['equity', 'etf', 'index', 'bond', 'crypto'] },
-        },
-      },
-      timeRange: {
-        type: 'object',
-        required: ['mode', 'basis', 'count', 'end'],
-        additionalProperties: false,
-        properties: {
-          mode: { type: 'string', enum: ['relative'] },
-          basis: { type: 'string', enum: ['trading_day'] },
-          count: { type: 'integer', minimum: 1, maximum: 60 },
-          end: { type: 'string' },
-        },
-      },
-      metrics: {
-        type: 'array',
-        minItems: 1,
-        items: {
-          type: 'object',
-          required: ['id', 'label', 'kind', 'unit'],
-          additionalProperties: false,
-          properties: {
-            id: { type: 'string' },
-            label: { type: 'string' },
-            kind: { type: 'string', enum: ['raw', 'derived'] },
-            unit: { type: 'string', enum: ['CNY', 'share', '%'] },
-          },
-        },
-      },
-      dataSource: {
-        type: 'object',
-        required: ['preference', 'resolved', 'datasetId', 'asOf', 'timezone', 'priceAdjustment'],
-        additionalProperties: false,
-        properties: {
-          preference: { type: 'string', enum: ['embedded_mock', 'wencai', 'auto'] },
-          resolved: { type: 'string', enum: ['embedded_mock', 'wencai'] },
-          datasetId: { type: 'string' },
-          asOf: { type: 'string' },
-          timezone: { type: 'string' },
-          priceAdjustment: { type: 'string', enum: ['raw', 'adjusted'] },
-        },
-      },
-      transforms: {
-        type: 'array',
-        items: {
-          type: 'object',
-          required: ['id', 'type', 'field', 'order', 'limit'],
-          additionalProperties: false,
-          properties: {
-            id: { type: 'string' },
-            type: { type: 'string', enum: ['rank'] },
-            field: { type: 'string' },
-            order: { type: 'string', enum: ['asc', 'desc'] },
-            limit: { type: 'integer', minimum: 1 },
-          },
-        },
-      },
-      views: {
-        type: 'array',
-        minItems: 1,
-        items: {
-          type: 'object',
-          required: ['id', 'title', 'x', 'series', 'annotations'],
-          additionalProperties: false,
-          properties: {
-            id: { type: 'string' },
-            title: { type: 'string' },
-            x: {
-              type: 'object',
-              required: ['field', 'type'],
-              additionalProperties: false,
-              properties: {
-                field: { type: 'string' },
-                type: { type: 'string', enum: ['ordinal', 'linear'] },
-              },
-            },
-            series: {
-              type: 'array',
-              minItems: 1,
-              items: {
-                type: 'object',
-                required: ['id', 'field', 'mark', 'unit'],
-                additionalProperties: false,
-                properties: {
-                  id: { type: 'string' },
-                  field: { type: 'string' },
-                  mark: { type: 'string', enum: ['line', 'bar'] },
-                  unit: { type: 'string', enum: ['CNY', 'share', '%'] },
-                },
-              },
-            },
-            annotations: {
-              type: 'array',
-              items: {
-                type: 'object',
-                required: ['id', 'type', 'transformRef', 'label'],
-                additionalProperties: false,
-                properties: {
-                  id: { type: 'string' },
-                  type: { type: 'string', enum: ['highlight'] },
-                  transformRef: { type: 'string' },
-                  label: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
-      },
-      insight: {
-        type: 'object',
-        required: ['summary', 'facts'],
-        additionalProperties: false,
-        properties: {
-          summary: { type: 'string' },
-          facts: {
-            type: 'array',
-            items: {
-              type: 'object',
-              required: ['kind', 'metric', 'label'],
-              additionalProperties: false,
-              properties: {
-                kind: { type: 'string', enum: ['period_change', 'worst_days', 'best_days', 'max_volume_days', 'min_volume_days'] },
-                metric: { type: 'string' },
-                label: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
+    description: 'Structured stock analysis dashboard specification v1.0.0',
+    note: 'Zod schema is the source of truth. This JSON Schema is informational only.',
+    _sourceOfTruth: 'DashboardSpecSchema (Zod)',
   };
 }

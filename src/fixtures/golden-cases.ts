@@ -1,11 +1,12 @@
 /**
  * Golden Cases — 5 success cases + 5 follow-up patch cases.
  *
- * Each case is a self-contained fixture with:
- * - input: natural language description (for future Interpreter)
- * - expectedSpec: the DashboardSpec that should be generated
- * - expectedPatch (for follow-up): the DashboardPatch
- * - expectedPatchedSpec: the spec after applying the patch
+ * Updated for v1.0.0 contract tightening:
+ * - schemaVersion = '1.0.0' (literal)
+ * - insight.intentSummary (not summary)
+ * - insight facts use rank_summary with transformRef
+ * - x = { field: 'date', type: 'ordinal' } (literal)
+ * - dataSource.resolved = 'embedded_mock', priceAdjustment = 'raw'
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
@@ -55,9 +56,9 @@ export const G1_SPEC: DashboardSpec = DS({
     },
   ],
   insight: {
-    summary: '分析A公司最近30个交易日的收盘价和成交量变化',
+    intentSummary: '分析A公司最近30个交易日的收盘价和成交量变化',
     facts: [
-      { kind: 'worst_days', metric: 'change_pct', label: '跌幅最大的3个交易日' },
+      { kind: 'rank_summary', metric: 'change_pct', label: '跌幅最大的3个交易日', transformRef: 'worst_3_days' },
     ],
   },
 });
@@ -93,7 +94,7 @@ export const G2_SPEC: DashboardSpec = DS({
     },
   ],
   insight: {
-    summary: '比较B公司最近20个交易日的开盘价和收盘价走势',
+    intentSummary: '比较B公司最近20个交易日的开盘价和收盘价走势',
     facts: [],
   },
 });
@@ -126,9 +127,9 @@ export const G3_SPEC: DashboardSpec = DS({
     },
   ],
   insight: {
-    summary: '展示A公司最近15个交易日的涨跌幅',
+    intentSummary: '展示A公司最近15个交易日的涨跌幅',
     facts: [
-      { kind: 'best_days', metric: 'change_pct', label: '涨幅最大的3天' },
+      { kind: 'rank_summary', metric: 'change_pct', label: '涨幅最大的3天', transformRef: 'best_3_days' },
     ],
   },
 });
@@ -163,9 +164,9 @@ export const G4_SPEC: DashboardSpec = DS({
     },
   ],
   insight: {
-    summary: '查看B公司最近30个交易日的成交量',
+    intentSummary: '查看B公司最近30个交易日的成交量',
     facts: [
-      { kind: 'max_volume_days', metric: 'volume', label: '成交量最高的5天' },
+      { kind: 'rank_summary', metric: 'volume', label: '成交量最高的5天', transformRef: 'top_5_volume' },
     ],
   },
 });
@@ -200,7 +201,7 @@ export const G5_SPEC: DashboardSpec = DS({
     },
   ],
   insight: {
-    summary: '分析A公司最近20个交易日的最高价和最低价走势',
+    intentSummary: '分析A公司最近20个交易日的最高价和最低价走势',
     facts: [],
   },
 });

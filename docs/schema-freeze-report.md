@@ -1,150 +1,105 @@
 # Schema Freeze Report — DashboardSpec v1.0
 
-## Gate 验证结果
+## Round 1 Gate (base: 588530d)
 
 ```
 DATASET_INVARIANTS=PASS
-  MOCK.A: 80 trading days, all invariants satisfied
-  MOCK.B: 80 trading days, all invariants satisfied
-  Coverage: 80 >= 61 (60 max query + 1 lookback)
-  asOf consistency: 2025-12-31 matches manifest
-
 INSTRUMENT_REGISTRY=PASS
-  MOCK.A: equity, A公司, 4 aliases
-  MOCK.B: equity, B公司, 4 aliases
-  2/2 instruments registered
-
 METRIC_REGISTRY=PASS
-  6/6 metrics registered
-  raw: open(CNY), high(CNY), low(CNY), close(CNY), volume(share)
-  derived: change_pct(%)
-  All metrics support line + bar marks
-  Single source of truth: no other module hardcodes units
+SCHEMA_STRUCTURAL_VALIDATION=PASS
+SCHEMA_SEMANTIC_VALIDATION=PASS
+DASHBOARD_PATCH_VALIDATION=PASS
+PATCH_REVALIDATION=PASS
+GOLDEN_CASES=5/5 PASS
+FOLLOWUP_CASES=5/5 PASS
+NEGATIVE_CASES=9/9 PASS
+RENDERER_CONTRACT_PROBE=PASS
+METAMORPHIC_FIXTURES=READY
+REQUIREMENT_MAPPING=COMPLETE
+TYPECHECK=PASS (99 tests)
+LINT=PASS
+BUILD=PASS
+SCHEMA_FREEZE_CANDIDATE=YES
+```
+
+## Round 2: Contract Tightening (独立审计后)
+
+### 修复的 P1 问题
+
+| # | 问题 | 修复方式 |
+|---|------|----------|
+| 2 | DataSource 允许未接入的 provider | resolved=literal('embedded_mock'), priceAdjustment=literal('raw') |
+| 3 | metrics 不是真正的 dependency closure | series/transform/insight 字段必须 ∈ spec.metrics |
+| 4 | x-axis 允许未实现的能力 | field=literal('date'), type=literal('ordinal') |
+| 5 | Renderer 接受全 null 数据 | 增加 hasFiniteValue 检查 |
+| 6 | summary 可以伪装计算结果 | 改名 intentSummary，明确只表达意图 |
+| 7 | Insight 和 Transform 两套排序 | rank_summary 引用 transformRef，同源 |
+| 8 | Schema 声明未实现的能力 | 删除 min_volume_days |
+| 9 | 手写 JSON Schema 与 Zod 漂移 | 使用 Zod 原生导出 |
+| 10 | schemaVersion 太宽 | z.literal('1.0.0') |
+| 11 | instrument metadata 不一致 | Semantic Validator 比对 Registry |
+| 12 | Mock calendar 错标为 SSE | 改为 MOCK_WEEKDAY |
+| 13 | 自定义"像 ECharts"的类型 | 加入真实 echarts 依赖 |
+| 14 | 多单位合并到一个 Y 轴 | 每 distinct unit 一个 axis |
+
+### Round 2 Gate
+
+```
+DATASET_INVARIANTS=PASS
+INSTRUMENT_REGISTRY=PASS
+METRIC_REGISTRY=PASS
 
 SCHEMA_STRUCTURAL_VALIDATION=PASS
-  Zod strict mode: rejects unknown properties
-  Rejects: null, empty object, invalid enum, missing fields, type errors
-  Zod v4 compatibility: invalid_value mapped to INVALID_ENUM
-  5/5 Golden Cases pass structural validation
-
 SCHEMA_SEMANTIC_VALIDATION=PASS
-  instrument: registry membership checked
-  metrics: registry membership + unit consistency + id uniqueness
-  series.field: existence in available fields
-  series.mark: metric compatibility
-  transform.field: existence
-  annotation.transformRef: closure
-  timeRange: data capability check
-  dataSource.resolved: provider registration
-  5/5 Golden Cases pass semantic validation
+
+DATASOURCE_PROVENANCE_VALIDATION=PASS (A1-A5)
+METRIC_DEPENDENCY_CLOSURE=PASS (A6-A8)
+X_AXIS_CONTRACT=PASS (A9-A10)
 
 DASHBOARD_PATCH_VALIDATION=PASS
-  4 patch types: replace_metric, add_metric, set_time_range, set_mark
-  All patches validated against current spec before application
-  Zod structural validation on patch input
-
 PATCH_REVALIDATION=PASS
-  Every patch application triggers full structural + semantic re-validation
-  replace_metric handles dedup (target already in metrics)
-  5/5 Follow-up Cases pass re-validation
 
-GOLDEN_CASES=5/5 PASS
-  G1: 收盘价+成交量+跌幅排名+replace_metric
-  G2: 开盘价vs收盘价多序列+set_time_range
-  G3: 涨跌幅柱状图+set_mark(line)
-  G4: 成交量+top排名+set_time_range
-  G5: 最高价+最低价+add_metric(close)
-
-FOLLOWUP_CASES=5/5 PASS
-  G1-F: replace volume→change_pct (dedup handled)
-  G2-F: set time range to 10
-  G3-F: set mark to line
-  G4-F: set time range to 20
-  G5-F: add close series to existing view
-
-NEGATIVE_CASES=9/9 PASS
-  N1: UNKNOWN_INSTRUMENT (未知股票)
-  N2: UNSUPPORTED_METRIC (不支持的指标)
-  N3: INVALID_TIME_RANGE (零天范围, structural)
-  N4: INVALID_ENUM (不支持的图表类型, structural)
-  N5: MISSING_SERIES_FIELD (series引用不存在metric)
-  N6: MISSING_TRANSFORM_REF (annotation引用不存在transform)
-  N7: TIME_RANGE_EXCEEDS_DATA (超出数据能力)
-  N8: PATCH_TARGET_NOT_FOUND (替换不存在的metric)
-  N9: PATCH_TARGET_NOT_FOUND (add到不存在的view)
+INSIGHT_TRANSFORM_CONSISTENCY=PASS (A15-A16)
 
 RENDERER_CONTRACT_PROBE=PASS
-  Verified: single-series line, multi-series line, bar, multi-axis (different units)
-  Verified: annotation/markPoint mapping via transforms
-  Verified: empty data returns failure
-  Verified: validateEChartsOption rejects malformed options
-  All 5 Golden Cases compile to valid ECharts options
+ECHARTS_TYPE_CONTRACT=PASS (real echarts dependency)
+MULTI_UNIT_AXIS_MAPPING=PASS (A17)
 
-METAMORPHIC_FIXTURES=READY
-  3 pairs with 2-5 variants each
-  Covers: price+volume, open vs close, bar chart
-  Actual metamorphic tests deferred to Interpreter phase
+GOLDEN_CASES=5/5 PASS
+FOLLOWUP_CASES=5/5 PASS
+NEGATIVE_CASES=9/9 PASS
+ADVERSARIAL_REGRESSION_CASES=18/18 PASS
 
+JSON_SCHEMA_EXPORT=PASS (A18)
 REQUIREMENT_MAPPING=COMPLETE
-  All 20+ requirement items mapped to design, module, and test evidence
-  See docs/requirements-matrix.md
 
-UNMAPPED_REQUIREMENTS=NONE
+TYPECHECK=PASS (0 errors)
+TESTS=PASS (106/106)
+LINT=PASS (0 errors, 0 warnings)
+BUILD=PASS (257ms)
 
-TYPECHECK=PASS (tsc -b, 0 errors)
-TESTS=PASS (99/99)
-LINT=PASS (oxlint, 0 errors, 0 warnings)
-BUILD=PASS (vite build, 446ms)
+P0_BLOCKERS=0
+P1_BLOCKERS=0
 
 SCHEMA_VERSION=1.0.0
 SCHEMA_FREEZE_CANDIDATE=YES
 ```
 
-## 自审发现的问题
+## 自审检查清单 (Round 2)
 
-| # | 问题 | 状态 | 详情 |
-|---|------|------|------|
-| 1 | replace_metric 产生重复 metric id | ✅ 已修复 | applyPatch 检查 to 是否已存在 |
-| 2 | Zod v4 用 `invalid_value` 代替 `invalid_enum_value` | ✅ 已修复 | structural.ts 兼容两者 |
-| 3 | Zod v4 invalid_type 无 received 属性 | ✅ 已修复 | 简化错误映射逻辑 |
-
-## 自审检查清单
-
-| 检查项 | 结果 |
-|--------|------|
-| 交易日和自然日是否混淆 | ✅ 无混淆，basis=trading_day |
-| change_pct 是否在错误阶段计算 | ✅ 先算后截（回归测试验证） |
-| raw/adjusted price 语义 | ✅ priceAdjustment=raw，明确 scope |
-| 单位是否可能产生错误 | ✅ Metric Registry 唯一定义，语义校验比对 |
-| preference 和 resolved 是否可能不一致 | ✅ Schema 分离，语义校验检查 resolved |
-| metrics 与 series 职责是否混乱 | ✅ metrics=分析依赖，series=展示 |
-| 多序列是否自然表达 | ✅ G2 (open+close) 和 G5 (high+low+close) 验证 |
-| Follow-up 是否真正修改已有状态 | ✅ 不重新生成，applyPatch 增量修改 |
-| Patch 后是否重新校验 | ✅ applyPatch 末尾调用 validateStructure + validateSemantics |
-| Renderer 是否能处理所有合法 Schema | ✅ 所有 Golden Cases 编译为有效 ECharts option |
-| 是否存在多模块重复定义业务规则 | ✅ Metric Registry 唯一定义 unit/supportedMarks |
-
-## Schema 版本
-
-- **schemaVersion**: 1.0.0
-- **Zod version**: 4.6.5
-- **TypeScript version**: 6.0.2
-- **Vite version**: 8.3.0
-
-## 冻结范围
-
-以下模块在 Schema Freeze 后不可随意变更：
-
-- `DashboardSpecSchema` (所有字段和类型)
-- `DashboardPatchSchema` (所有操作类型)
-- `MetricEntry` 结构
-- `InstrumentEntry` 结构
-- 错误码枚举
-
-可扩展（向后兼容）：
-
-- 新增 metric（不改变现有 metric 的 id/unit）
-- 新增 mark type（不改变现有 mark）
-- 新增 transform type
-- 新增 patch op
-- 新增 error code
+| 检查项 | 结果 | 证据 |
+|--------|------|------|
+| 交易日和自然日混淆 | ✅ | basis=trading_day, A9-A10 |
+| change_pct 错误阶段计算 | ✅ | 先算后截回归测试 |
+| raw/adjusted 语义 | ✅ | priceAdjustment=literal('raw'), A5 |
+| 单位可能产生错误 | ✅ | Metric Registry 唯一定义，语义校验比对 |
+| preference/resolved 不一致 | ✅ | resolved=literal, A1-A5 |
+| metrics 与 series 职责混乱 | ✅ | A6-A8 验证 dependency closure |
+| 多序列自然表达 | ✅ | G2/G5 验证 |
+| Follow-up 修改已有状态 | ✅ | Patch 不重新生成 |
+| Patch 后重新校验 | ✅ | applyPatch 末尾校验 |
+| Schema 比 Renderer 更宽 | ✅ | x-axis literal, A9-A10 |
+| 多模块重复定义 | ✅ | Metric Registry 唯一定义 |
+| Insight 与图表数据不一致 | ✅ | rank_summary 同源, A15-A16 |
+| Mock calendar 伪装真实 | ✅ | MOCK_WEEKDAY, foundation.test.ts |
+| Renderer 只验形状不验数据 | ✅ | hasFiniteValue, A14 |

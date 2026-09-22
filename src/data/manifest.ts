@@ -3,6 +3,9 @@
  *
  * Invariant: manifest.asOf === last trading day in the canonical dataset.
  * This value is static and must not depend on runtime date.
+ *
+ * calendar = MOCK_WEEKDAY: excludes weekends only, does NOT model
+ * Chinese public holidays or SSE closures. For deterministic demo use only.
  */
 
 export interface DatasetManifest {
@@ -22,9 +25,9 @@ export const MANIFEST: DatasetManifest = {
   schemaVersion: '1.0.0',
   asOf: '2025-12-31',
   timezone: 'Asia/Shanghai',
-  calendar: 'SSE',          // Shanghai Stock Exchange
+  calendar: 'MOCK_WEEKDAY',  // weekdays only, not real SSE calendar
   currency: 'CNY',
   volumeUnit: 'share',
-  priceAdjustment: 'raw',   // no dividend/split adjustment
+  priceAdjustment: 'raw',    // no dividend/split adjustment
   tradingDaysPerInstrument: 80,
 };

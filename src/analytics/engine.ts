@@ -7,6 +7,9 @@
  *
  * Pipeline:
  *   raw series → compute derived → apply time range → transforms → final data
+ *
+ * Insight invariant: ranking facts consume the SAME transform results as
+ * annotations. No independent re-sorting.
  */
 
 import type { RawStockRecord } from '../data/mock-dataset';
@@ -36,12 +39,11 @@ export function computeChangePct(
     let change_pct: number;
 
     if (i === 0) {
-      // First day: no previous close, set to 0
       change_pct = 0;
     } else {
       const prevClose = records[i - 1].close;
       change_pct = ((r.close - prevClose) / prevClose) * 100;
-      change_pct = Math.round(change_pct * 100) / 100; // 2 decimal places
+      change_pct = Math.round(change_pct * 100) / 100;
     }
 
     enriched.push({ ...r, change_pct });
@@ -63,7 +65,7 @@ export function applyTimeRange(
 
 export interface RankedResult {
   records: EnrichedRecord[];
-  rankedIndices: number[]; // indices into the input records array
+  rankedIndices: number[];
 }
 
 export function applyRankTransform(
@@ -72,7 +74,6 @@ export function applyRankTransform(
 ): RankedResult {
   const indexed = records.map((r, i) => ({ record: r, index: i }));
 
-  // Sort by the transform field
   indexed.sort((a, b) => {
     const va = getField(a.record, transform.field) ?? 0;
     const vb = getField(b.record, transform.field) ?? 0;
@@ -80,7 +81,6 @@ export function applyRankTransform(
     return transform.order === 'asc' ? cmp : -cmp;
   });
 
-  // Take top N
   const topN = indexed.slice(0, transform.limit);
 
   return {
@@ -92,31 +92,22 @@ export function applyRankTransform(
 // ── Full analytics pipeline ────────────────────────────────────────────────
 
 export interface AnalyticsResult {
-  /** Full enriched series (after time range filter) */
   series: EnrichedRecord[];
-  /** Transform results keyed by transform id */
   transforms: Map<string, RankedResult>;
-  /** Empty if no data */
   isEmpty: boolean;
 }
 
 export function runAnalytics(spec: DashboardSpec): AnalyticsResult {
-  // 1. Get raw data
   const raw = getDataset(spec.instrument.symbol);
   if (!raw || raw.length === 0) {
     return { series: [], transforms: new Map(), isEmpty: true };
   }
 
-  // 2. Compute derived metrics on FULL series (before time range filter!)
   const enriched = computeChangePct(raw);
-
-  // 3. Apply time range
   const filtered = applyTimeRange(enriched, spec.timeRange.count);
 
-  // 4. Apply transforms
   const transforms = new Map<string, RankedResult>();
   for (const t of spec.transforms) {
-    // Transforms operate on the time-filtered data
     const result = applyRankTransform(filtered, t);
     transforms.set(t.id, result);
   }
@@ -128,17 +119,16 @@ export function runAnalytics(spec: DashboardSpec): AnalyticsResult {
   };
 }
 
-// ── Insight computation ────────────────────────────────────────────────────
+// ── Insight computation (Issue #7: ranking facts consume transform results) ──
 
 export interface InsightData {
   period_change?: { metric: string; startValue: number; endValue: number; changePct: number };
-  worst_days?: { metric: string; days: { date: string; value: number }[] };
-  best_days?: { metric: string; days: { date: string; value: number }[] };
-  max_volume_days?: { metric: string; days: { date: string; value: number }[] };
+  rank_results?: Map<string, { transformRef: string; metric: string; label: string; records: { date: string; value: number }[] }>;
 }
 
 export function computeInsight(spec: DashboardSpec, analytics: AnalyticsResult): InsightData {
   const result: InsightData = {};
+  const rankResults = new Map<string, { transformRef: string; metric: string; label: string; records: { date: string; value: number }[] }>();
 
   for (const fact of spec.insight.facts) {
     switch (fact.kind) {
@@ -155,45 +145,27 @@ export function computeInsight(spec: DashboardSpec, analytics: AnalyticsResult):
         }
         break;
       }
-      case 'worst_days': {
-        const sorted = [...analytics.series].sort((a, b) => {
-          return (getField(a, fact.metric) ?? 0) - (getField(b, fact.metric) ?? 0);
-        });
-        result.worst_days = {
-          metric: fact.metric,
-          days: sorted.slice(0, 3).map((r) => ({
-            date: r.date,
-            value: getField(r, fact.metric) ?? 0,
-          })),
-        };
-        break;
-      }
-      case 'best_days': {
-        const sorted = [...analytics.series].sort((a, b) => {
-          return (getField(b, fact.metric) ?? 0) - (getField(a, fact.metric) ?? 0);
-        });
-        result.best_days = {
-          metric: fact.metric,
-          days: sorted.slice(0, 3).map((r) => ({
-            date: r.date,
-            value: getField(r, fact.metric) ?? 0,
-          })),
-        };
-        break;
-      }
-      case 'max_volume_days': {
-        const sorted = [...analytics.series].sort((a, b) => b.volume - a.volume);
-        result.max_volume_days = {
-          metric: fact.metric,
-          days: sorted.slice(0, 5).map((r) => ({
-            date: r.date,
-            value: r.volume,
-          })),
-        };
+      case 'rank_summary': {
+        // MUST consume the same transform result as annotations — no independent re-sorting
+        if (fact.transformRef) {
+          const transformResult = analytics.transforms.get(fact.transformRef);
+          if (transformResult) {
+            rankResults.set(fact.transformRef, {
+              transformRef: fact.transformRef,
+              metric: fact.metric,
+              label: fact.label,
+              records: transformResult.records.map((r) => ({
+                date: r.date,
+                value: getField(r, fact.metric) ?? 0,
+              })),
+            });
+          }
+        }
         break;
       }
     }
   }
 
+  result.rank_results = rankResults;
   return result;
 }
