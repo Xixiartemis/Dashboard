@@ -334,6 +334,17 @@ src/interpreter/
 
 ---
 
+## Block 4.1: Runtime UI Handoff Hardening
+
+### subscribe API
+Controller 增加 `subscribe(listener): unsubscribe`。每次 `setState` 后通知所有 listeners，listener 收到 immutable snapshot。React 可用 `useSyncExternalStore` 消费。
+
+### Race guard
+`generation` token：`reset()` 递增 generation，`submitCommand` 捕获当前 generation。旧请求完成后检查 generation 是否匹配，不匹配则不写入 state。
+
+### Public surface 收紧
+`createDashboardRuntime()` 只暴露 `controller`，不暴露 `service`。UI 无法绕过 Controller 直接调 Service。测试用 `createRuntimeWithInterpreter()` 暴露 service。
+
 ## Block 4: Runtime Integration
 
 ### 为什么先做 Error Mapping 再做 Controller

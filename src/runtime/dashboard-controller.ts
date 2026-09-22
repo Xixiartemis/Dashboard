@@ -9,6 +9,8 @@
  * 5. Manages running state
  * 6. Preserves previous dashboard on follow-up failure
  * 7. Supports reset / new analysis
+ * 8. Observable state via subscribe() for reactive UIs
+ * 9. Race guard: stale completions cannot overwrite fresh state
  *
  * NOT responsible for:
  * - Business data computation
@@ -46,21 +48,33 @@ export interface DashboardControllerState {
   commandContext: 'initial' | 'refine';
 }
 
+export type StateListener = (state: DashboardControllerState) => void;
+
 // ── Controller Interface ─────────────────────────────────────────────────
 
 export interface DashboardController {
-  /** Get current state snapshot. */
+  /** Get current state snapshot (immutable copy). */
   getState(): DashboardControllerState;
+
+  /**
+   * Subscribe to state changes. Listener fires on every state update
+   * (including pipeline events during a run).
+   * Returns unsubscribe function.
+   */
+  subscribe(listener: StateListener): () => void;
 
   /**
    * Submit a command. Automatically determines initial vs follow-up.
    * Returns the DashboardRunResult.
    * On follow-up failure, preserves lastSuccess.
+   * On concurrent submit, returns RUNTIME_BUSY.
+   * Stale completions (after reset) are silently discarded.
    */
   submitCommand(input: string): Promise<DashboardRunResult>;
 
   /**
    * Start a new analysis. Clears all state.
+   * In-flight requests are invalidated (stale guard).
    * Next submitCommand will be 'initial'.
    */
   reset(): void;
@@ -79,13 +93,30 @@ export function createDashboardController(
     commandContext: 'initial',
   };
 
-  function updateState(partial: Partial<DashboardControllerState>) {
+  const listeners = new Set<StateListener>();
+
+  // Race guard: incremented on reset, captured on submit
+  let generation = 0;
+
+  function setState(partial: Partial<DashboardControllerState>) {
     state = { ...state, ...partial };
+    // Notify all subscribers with immutable snapshot
+    const snapshot = { ...state };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
   }
 
   return {
     getState() {
       return { ...state };
+    },
+
+    subscribe(listener: StateListener): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
 
     async submitCommand(input: string): Promise<DashboardRunResult> {
@@ -101,26 +132,36 @@ export function createDashboardController(
         return failure;
       }
 
+      // Capture generation for stale guard
+      const runGeneration = generation;
+
       // Clear previous error, set running
-      updateState({ running: true, latestError: null, pipeline: createInitialTrace() });
+      setState({ running: true, latestError: null, pipeline: createInitialTrace() });
 
       const onEvent = (event: PipelineEvent) => {
-        updateState({ pipeline: reducePipelineEvent(state.pipeline, event) });
+        // Don't update if stale
+        if (runGeneration !== generation) return;
+        setState({ pipeline: reducePipelineEvent(state.pipeline, event) });
       };
       const options: RunOptions = { onEvent };
 
       let result: DashboardRunResult;
 
       if (state.commandContext === 'initial' || !state.lastSuccess) {
-        // ── Initial: no current spec ──
         result = await service.runQuery(input, options);
       } else {
-        // ── Follow-up: has current spec ──
         result = await service.runFollowUp(state.lastSuccess.spec, input, options);
       }
 
+      // Stale guard: if reset was called during this run, discard result
+      if (runGeneration !== generation) {
+        // Return the result to the caller (they can still use it)
+        // but don't update controller state
+        return result;
+      }
+
       if (result.status === 'success') {
-        updateState({
+        setState({
           lastSuccess: result,
           latestError: null,
           running: false,
@@ -129,11 +170,10 @@ export function createDashboardController(
         });
       } else {
         // Follow-up failure: preserve lastSuccess
-        updateState({
+        setState({
           latestError: result,
           running: false,
           pipeline: result.trace,
-          // commandContext stays 'refine' — user can still refine
         });
       }
 
@@ -141,6 +181,7 @@ export function createDashboardController(
     },
 
     reset() {
+      generation += 1;
       state = {
         lastSuccess: null,
         latestError: null,
@@ -148,6 +189,11 @@ export function createDashboardController(
         pipeline: createInitialTrace(),
         commandContext: 'initial',
       };
+      // Notify subscribers of reset
+      const snapshot = { ...state };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   };
 }

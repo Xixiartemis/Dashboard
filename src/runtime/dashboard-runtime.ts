@@ -3,39 +3,47 @@
  *
  * UI imports from here, NOT from interpreter or application internals.
  *
- * Usage:
- *   import { createRuntime } from '../runtime';
- *   const runtime = createRuntime();
- *   const result = await runtime.controller.submitCommand('分析A公司...');
+ * Product entry: createDashboardRuntime() — exposes only controller.
+ * Test entry: createRuntimeWithInterpreter() — exposes both for test assertions.
  */
 
 import { DeterministicInterpreter } from '../interpreter/deterministic-interpreter';
 import { createDashboardService } from '../application/dashboard-service';
 import { createDashboardController, type DashboardController } from './dashboard-controller';
-import type { DashboardService } from '../application/contracts';
+import type { DashboardInterpreterPort } from '../application/contracts';
+
+// ── Product Runtime (controller only, no service escape hatch) ────────────
 
 export interface DashboardRuntime {
-  service: DashboardService;
   controller: DashboardController;
 }
 
 /**
- * Create a fully wired runtime with DeterministicInterpreter.
- * This is the Composition Root — the only place that knows about concrete implementations.
+ * Create a product runtime. UI only sees the controller.
+ * The service is internal — UI cannot bypass the controller.
  */
-export function createRuntime(): DashboardRuntime {
+export function createDashboardRuntime(): DashboardRuntime {
   const interpreter = new DeterministicInterpreter();
   const service = createDashboardService(interpreter);
   const controller = createDashboardController(service);
-  return { service, controller };
+  return { controller };
+}
+
+// ── Test Runtime (exposes service for assertions) ─────────────────────────
+
+export interface TestDashboardRuntime {
+  service: import('../application/contracts').DashboardService;
+  controller: DashboardController;
 }
 
 /**
- * Create a runtime with a custom interpreter (for testing).
+ * Create a test runtime with a custom interpreter.
+ * Exposes service for direct test assertions.
+ * NOT for product UI use.
  */
 export function createRuntimeWithInterpreter(
-  interpreter: import('../application/contracts').DashboardInterpreterPort,
-): DashboardRuntime {
+  interpreter: DashboardInterpreterPort,
+): TestDashboardRuntime {
   const service = createDashboardService(interpreter);
   const controller = createDashboardController(service);
   return { service, controller };

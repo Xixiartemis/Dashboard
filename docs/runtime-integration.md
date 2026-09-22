@@ -84,6 +84,34 @@ No gap in the event stream.
 
 Both produce `DashboardRunResult`. UI code doesn't branch on fixture vs runtime.
 
-## 9. Concurrency
+## 9. Observable State (subscribe)
 
-`submitCommand()` returns `RUNTIME_BUSY` if a run is already in progress. No race conditions.
+```ts
+const unsub = controller.subscribe((state) => {
+  // state.running, state.pipeline, state.lastSuccess, state.latestError
+  // All immutable snapshots
+});
+// Later:
+unsub();
+```
+
+React integration:
+```ts
+import { useSyncExternalStore } from 'react';
+const state = useSyncExternalStore(
+  runtime.controller.subscribe,
+  runtime.controller.getState,
+  runtime.controller.getState
+);
+```
+
+## 10. Race Guard
+
+Generation token prevents stale completions from overwriting fresh state:
+- `reset()` increments generation
+- `submitCommand()` captures generation at start
+- On completion, checks generation — stale results discarded from state
+
+## 11. Concurrency
+
+`submitCommand()` returns `RUNTIME_BUSY` if already running. UI should disable submit while `state.running === true`.
