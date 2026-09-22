@@ -12,8 +12,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@vitest/coverage-v8": "^5.0.1",
     "echarts": "^6.1.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "vitest": "^5.0.1",
@@ -24,7 +27,9 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.4.21",
     "oxlint": "^1.81.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }
