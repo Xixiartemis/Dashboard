@@ -334,6 +334,24 @@ src/interpreter/
 
 ---
 
+## Block 4: Runtime Integration
+
+### 为什么先做 Error Mapping 再做 Controller
+
+发现 InterpreterError 在 Application Boundary 被 generic 化（所有错误变成 INTERPRETER_ERROR），typed code/message/details 丢失。用 duck typing 修复：检查 `{code, message}` shape 而非 `instanceof`，Application 不 import Interpreter 内部。
+
+### 关键设计决策
+
+1. **Composition Root** — `src/runtime/dashboard-runtime.ts` 是唯一知道具体实现的地方。UI import runtime，不 import interpreter/application 内部。
+
+2. **Runtime Controller** — `submitCommand()` 自动判断 initial vs follow-up（基于 `lastSuccess` 是否存在）。UI 不需要自己调 `runQuery` / `runFollowUp`。
+
+3. **Follow-up failure preserves dashboard** — `lastSuccess` 不被覆盖，`latestError` 单独存储。用户看到旧 dashboard + 错误提示，不是全屏错误页。
+
+4. **PipelineEvent 是唯一 state source** — UI 动画基于真实事件，不用 setTimeout。Interpreter 失败时 emit `understand_request:error`，事件流无断裂。
+
+5. **并发安全** — `running=true` 时 `submitCommand` 返回 `RUNTIME_BUSY`。
+
 ## Block 3: Interpreter Evaluation + Hardening
 
 ### 方法论

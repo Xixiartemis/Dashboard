@@ -6,6 +6,7 @@
  * - Catches ALL interpreter exceptions → maps to DashboardRunFailure
  * - UI never sees a rejected Promise from public API
  * - Follow-up does NOT re-emit understand/build (only once per call)
+ * - Preserves typed InterpreterError codes via duck typing (no import dependency)
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
@@ -20,6 +21,7 @@ import type {
   PipelineStepId,
 } from './contracts';
 import { executeDownstreamPipeline, type DataAvailabilityChecker } from './materializer';
+import { applyPatch } from '../patch/apply-patch';
 
 const UPSTREAM_STEPS: PipelineStepId[] = ['understand_request', 'build_schema'];
 const DOWNSTREAM_STEPS: PipelineStepId[] = ['validate_schema', 'load_data', 'analyze', 'render'];
@@ -54,27 +56,55 @@ function markStep(
   }
 }
 
+// ── Interpreter Error Mapping (duck typing, no import dependency) ─────────
+
+interface StructuredError {
+  code?: string;
+  message?: string;
+  details?: string;
+}
+
+/**
+ * Extract structured error info from an unknown thrown value.
+ * Uses duck typing — works for InterpreterError objects without importing them.
+ */
+function extractErrorInfo(error: unknown): { code: string; message: string; details?: string } {
+  // Check for structured error (InterpreterError shape)
+  if (error !== null && typeof error === 'object') {
+    const e = error as StructuredError;
+    if (typeof e.code === 'string' && typeof e.message === 'string') {
+      return {
+        code: `INTERPRETER_${e.code}`,
+        message: e.message,
+        details: e.details,
+      };
+    }
+  }
+
+  // Check for standard Error
+  if (error instanceof Error) {
+    // Map known patterns
+    if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+      return { code: 'INTERPRETER_TIMEOUT', message: '理解请求超时，请重试', details: error.message };
+    }
+    if (error.message.includes('network') || error.message.includes('fetch')) {
+      return { code: 'INTERPRETER_NETWORK_ERROR', message: '网络连接失败，请检查网络后重试', details: error.message };
+    }
+    return { code: 'INTERPRETER_ERROR', message: '解读请求时发生错误', details: error.message };
+  }
+
+  // Unknown error type
+  return { code: 'INTERPRETER_ERROR', message: '解读请求时发生错误', details: String(error) };
+}
+
 function interpreterFailure(
   input: string,
   stage: PipelineStepId,
   error: unknown,
   upstreamTrace: PipelineStepSnapshot[],
+  options: RunOptions | undefined,
 ): DashboardRunFailure {
-  let code = 'INTERPRETER_ERROR';
-  let message = '解读请求时发生错误';
-  let details: string | undefined;
-
-  if (error instanceof Error) {
-    details = error.message;
-    // Map known error patterns to user-friendly messages
-    if (error.message.includes('timeout') || error.message.includes('Timeout')) {
-      code = 'INTERPRETER_TIMEOUT';
-      message = '理解请求超时，请重试';
-    } else if (error.message.includes('network') || error.message.includes('fetch')) {
-      code = 'INTERPRETER_NETWORK_ERROR';
-      message = '网络连接失败，请检查网络后重试';
-    }
-  }
+  const { code, message, details } = extractErrorInfo(error);
 
   const fullTrace: PipelineStepSnapshot[] = [
     ...upstreamTrace,
@@ -86,6 +116,9 @@ function interpreterFailure(
     failStep.status = 'error';
     failStep.message = message;
   }
+
+  // Emit error event so UI sees the failure in the event stream
+  emit(options, stage, 'error', message);
 
   return { status: 'error', input, stage, error: { code, message, details, recoverable: true }, trace: fullTrace };
 }
@@ -117,7 +150,7 @@ export function createDashboardService(
         spec = await interp.interpretInitial(input);
       } catch (error) {
         markStep(upstreamTrace, 'understand_request', 'error');
-        return interpreterFailure(input, 'understand_request', error, upstreamTrace);
+        return interpreterFailure(input, 'understand_request', error, upstreamTrace, options);
       }
       markStep(upstreamTrace, 'understand_request', 'success');
       emit(options, 'understand_request', 'success');
@@ -154,7 +187,7 @@ export function createDashboardService(
         patch = await interp.interpretFollowUp(currentSpec, input);
       } catch (error) {
         markStep(upstreamTrace, 'understand_request', 'error');
-        return interpreterFailure(input, 'understand_request', error, upstreamTrace);
+        return interpreterFailure(input, 'understand_request', error, upstreamTrace, options);
       }
       markStep(upstreamTrace, 'understand_request', 'success', `patch=${patch.op}`);
       emit(options, 'understand_request', 'success', `patch=${patch.op}`);
@@ -163,7 +196,6 @@ export function createDashboardService(
       emit(options, 'build_schema', 'start');
       markStep(upstreamTrace, 'build_schema', 'running');
 
-      const { applyPatch } = await import('../patch/apply-patch');
       const patchResult = applyPatch(currentSpec, patch);
       if (!patchResult.ok) {
         markStep(upstreamTrace, 'build_schema', 'error', 'Patch 应用失败');
