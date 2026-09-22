@@ -189,19 +189,13 @@ describe('CORE-05: Data-Grounded Conclusions', () => {
       expect(result.status).toBe('success');
       if (result.status !== 'success') return;
 
-      // Must have insight with items
       expect(result.insight).toBeTruthy();
-      // intentSummary is just a restatement — not a data conclusion
-      // Check for actual data items (rank or period_change)
-      const hasDataItems = (result.insight.items?.length ?? 0) > 0;
-      // Record status for reporting
-      if (hasDataItems) {
-        // Has real data-grounded conclusions
-        expect(result.insight.items!.length).toBeGreaterThan(0);
+      // Must have at least 1 data-grounded insight item (not just intentSummary)
+      expect(result.insight.items!.length).toBeGreaterThanOrEqual(1);
+      // Each item must be rank or period_change (from Analytics)
+      for (const item of result.insight.items!) {
+        expect(['rank', 'period_change']).toContain(item.type);
       }
-      // Store for reporting (even if no items, that's a PARTIAL)
-      // The test passes if insight exists; data grounding is reported separately
-      expect(result.insight.intentSummary).toBeTruthy();
     });
   }
 });
