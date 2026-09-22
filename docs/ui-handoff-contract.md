@@ -194,7 +194,21 @@ const result = await service.runQuery(input);
 **两者返回完全相同的 `DashboardRunResult` 类型**。
 UI 代码不需要区分 fixture 和真实运行。
 
-## 8. Error Fixtures
+## 8. Runtime vs Fixture
+
+### Fixture trace（开发阶段）
+`result.trace` = 一次已完成的 pipeline 快照，用于 UI 开发/replay。
+
+### PipelineEvent（运行时）
+Runtime 真正执行时的实时状态变化，通过 `RunOptions.onEvent` 接收。
+UI loading 动画的 source of truth 必须是 PipelineEvent，不要用 setTimeout 模拟。
+
+### Error Contract
+UI 不需要 try/catch 处理预期运行错误。
+`DashboardService.runQuery()` 和 `runFollowUp()` 永远 resolve `DashboardRunResult`，不会 reject Promise。
+Interpreter/Provider 的运行错误（timeout, network, invalid output）都映射为 `DashboardRunFailure`。
+
+## 9. Error Fixtures
 
 ```ts
 import { getFailureFixtures } from '../application';

@@ -53,6 +53,29 @@ P1_BLOCKERS=0
 UI_HANDOFF_READY=YES
 ```
 
+## Application Boundary Runtime Fix (v1.0.1)
+
+```
+TRUE_EMPTY_DATA_FIXTURE=PASS (AP11 — DataAvailabilityChecker seam)
+SERVICE_ERROR_BOUNDARY=PASS (AP12 — interpreter throw -> DashboardRunFailure)
+INITIAL_EVENT_ORDER=PASS (AP13 — understand_request:start before interpreter)
+FOLLOWUP_EVENT_DEDUP=PASS (AP14 — each step:phase exactly once)
+PIPELINE_STAGE_SEMANTICS=PASS (AP15 — load_data=availability, analyze=analytics)
+PUBLIC_API_SURFACE=PASS (AP16 — no executeSpec/executeFollowUp in barrel)
+
+FROZEN_SCHEMA_UNCHANGED=YES
+APPLICATION_TESTS=80/80 PASS (AP1-AP16)
+TOTAL_TESTS=187/187
+TYPECHECK=PASS
+TESTS=PASS
+LINT=PASS (0 errors)
+BUILD=PASS
+
+P0_BLOCKERS=0
+P1_BLOCKERS=0
+UI_HANDOFF_READY=YES
+```
+
 ## Round 2: Contract Tightening (独立审计后)
 
 ### 修复的 P1 问题

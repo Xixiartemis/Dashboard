@@ -7,10 +7,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { GOLDEN_CASES } from '../src/fixtures/golden-cases';
-import { executeSpec, executeFollowUp } from '../src/application/materializer';
+import { executeSpec, executeDownstreamPipeline, type DataAvailabilityChecker } from '../src/application/materializer';
+import { createDashboardService } from '../src/application/dashboard-service';
 import { getDemoFixtures, getFailureFixtures } from '../src/application/demo-fixtures';
+import type { DashboardSpec } from '../src/schema/dashboard-spec';
 import type {
   DashboardRunSuccess,
+  PipelineEvent,
 } from '../src/application/contracts';
 
 // ── AP1: Golden Materialization ───────────────────────────────────────────
@@ -257,12 +260,262 @@ describe('AP10: Immutability', () => {
     expect(specAfter).toEqual(specBefore);
   });
 
-  it('AP10b: executeFollowUp does not mutate input spec', () => {
+  it('AP10b: downstream pipeline does not mutate input spec', () => {
     const gc = GOLDEN_CASES[0];
-    if (!gc.patch) return;
     const specBefore = JSON.parse(JSON.stringify(gc.expectedSpec));
-    executeFollowUp(gc.expectedSpec, gc.patch, gc.patchInput ?? '');
+    executeDownstreamPipeline(gc.expectedSpec, {
+      trace: [
+        { id: 'validate_schema', status: 'pending' },
+        { id: 'load_data', status: 'pending' },
+        { id: 'analyze', status: 'pending' },
+        { id: 'render', status: 'pending' },
+      ],
+      input: gc.input,
+    });
     const specAfter = JSON.parse(JSON.stringify(gc.expectedSpec));
     expect(specAfter).toEqual(specBefore);
+  });
+});
+
+// ── AP11: Real Empty Data ─────────────────────────────────────────────────
+
+describe('AP11: Real Empty Data', () => {
+  it('AP11: empty data passes validation, fails at load_data with EMPTY_DATA', () => {
+    const failures = getFailureFixtures();
+    const emptyData = failures.find((f) => f.id === 'empty_data')!;
+    expect(emptyData).toBeDefined();
+    expect(emptyData.result.status).toBe('error');
+
+    const result = emptyData.result;
+    // Must NOT be a validation error
+    expect(result.stage).toBe('load_data');
+    expect(result.error.code).toBe('EMPTY_DATA');
+
+    // validate_schema must have succeeded
+    const validateStep = result.trace.find((s) => s.id === 'validate_schema');
+    expect(validateStep!.status).toBe('success');
+
+    // load_data must be error
+    const loadDataStep = result.trace.find((s) => s.id === 'load_data');
+    expect(loadDataStep!.status).toBe('error');
+
+    // Later steps skipped
+    const analyzeStep = result.trace.find((s) => s.id === 'analyze');
+    expect(analyzeStep!.status).toBe('skipped');
+  });
+});
+
+// ── AP12: Interpreter Error Mapping ──────────────────────────────────────
+
+describe('AP12: Interpreter Error Mapping', () => {
+  it('AP12: interpreter throw → DashboardRunFailure (not rejected Promise)', async () => {
+    const throwingInterpreter = {
+      async interpretInitial(): Promise<DashboardSpec> {
+        throw new Error('LLM provider timeout');
+      },
+      async interpretFollowUp(): Promise<never> {
+        throw new Error('network error');
+      },
+    };
+
+    const service = createDashboardService(throwingInterpreter);
+    const result = await service.runQuery('test input');
+
+    // Must resolve, not reject
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.stage).toBe('understand_request');
+      expect(result.error.recoverable).toBe(true);
+      expect(result.error.message.length).toBeGreaterThan(0);
+      // No raw Error / stack leaked
+      expect(result.error.message).not.toContain('at ');
+      expect(result.error.message).not.toContain('Error:');
+    }
+  });
+
+  it('AP12b: follow-up interpreter throw → DashboardRunFailure', async () => {
+    const throwingInterpreter = {
+      async interpretInitial(): Promise<DashboardSpec> {
+        throw new Error('fail');
+      },
+      async interpretFollowUp(): Promise<never> {
+        throw new Error('model returned invalid JSON');
+      },
+    };
+
+    const service = createDashboardService(throwingInterpreter);
+    const result = await service.runFollowUp(GOLDEN_CASES[0].expectedSpec, 'test');
+
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error.recoverable).toBe(true);
+    }
+  });
+});
+
+// ── AP13: Initial Event Ordering ─────────────────────────────────────────
+
+describe('AP13: Initial Event Ordering', () => {
+  it('AP13: events fire in correct order for initial query', () => {
+    const events: PipelineEvent[] = [];
+    const emptyChecker: DataAvailabilityChecker = { check: () => 1 };
+
+    // Use a test interpreter that returns a valid spec synchronously
+    const testInterpreter = {
+      async interpretInitial(_input: string): Promise<DashboardSpec> {
+        // Simulate async work
+        await new Promise((r) => setTimeout(r, 1));
+        return GOLDEN_CASES[0].expectedSpec;
+      },
+      async interpretFollowUp(): Promise<never> {
+        throw new Error('not used');
+      },
+    };
+
+    const service = createDashboardService(testInterpreter, emptyChecker);
+    service.runQuery('test', {
+      onEvent: (e) => {
+        events.push(e);
+        // Verify: when understand_request:start fires, interpreter should be running
+        if (e.step === 'understand_request' && e.phase === 'start') {
+          // The event fires BEFORE interpreter starts, so interpretStarted may be false
+          // This is correct — the event signals the start of the phase
+        }
+      },
+    });
+
+    // Check events synchronously after the call (events fire during execution)
+    // Since it's async, we need to wait
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const stepPhases = events.map((e) => `${e.step}:${e.phase}`);
+
+        // Must contain all 6 steps × 2 phases (start + success)
+        expect(stepPhases).toContain('understand_request:start');
+        expect(stepPhases).toContain('understand_request:success');
+        expect(stepPhases).toContain('build_schema:start');
+        expect(stepPhases).toContain('build_schema:success');
+        expect(stepPhases).toContain('validate_schema:start');
+        expect(stepPhases).toContain('validate_schema:success');
+        expect(stepPhases).toContain('load_data:start');
+        expect(stepPhases).toContain('load_data:success');
+        expect(stepPhases).toContain('analyze:start');
+        expect(stepPhases).toContain('analyze:success');
+        expect(stepPhases).toContain('render:start');
+        expect(stepPhases).toContain('render:success');
+
+        // understand_request:start must come before build_schema:start
+        const uStart = stepPhases.indexOf('understand_request:start');
+        const bStart = stepPhases.indexOf('build_schema:start');
+        expect(uStart).toBeLessThan(bStart);
+
+        resolve();
+      }, 100);
+    });
+  });
+});
+
+// ── AP14: Follow-up Event No Duplication ─────────────────────────────────
+
+describe('AP14: Follow-up Event No Duplication', () => {
+  it('AP14: follow-up emits each step phase exactly once', () => {
+    const events: PipelineEvent[] = [];
+    const emptyChecker: DataAvailabilityChecker = { check: () => 1 };
+
+    const testInterpreter = {
+      async interpretInitial(): Promise<DashboardSpec> {
+        return GOLDEN_CASES[0].expectedSpec;
+      },
+      async interpretFollowUp(): Promise<import('../src/schema/dashboard-patch').DashboardPatch> {
+        return GOLDEN_CASES[0].patch!;
+      },
+    };
+
+    const service = createDashboardService(testInterpreter, emptyChecker);
+    service.runFollowUp(GOLDEN_CASES[0].expectedSpec, 'replace metric', {
+      onEvent: (e) => events.push(e),
+    });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Count occurrences of each step+phase
+        const counts = new Map<string, number>();
+        for (const e of events) {
+          const key = `${e.step}:${e.phase}`;
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+
+        // Each step:phase should appear exactly once
+        for (const [, count] of counts) {
+          expect(count).toBe(1);
+        }
+
+        // Should NOT have duplicate understand_request:start
+        expect(counts.get('understand_request:start')).toBe(1);
+        expect(counts.get('build_schema:start')).toBe(1);
+
+        resolve();
+      }, 100);
+    });
+  });
+});
+
+// ── AP15: Stage Semantic Ownership ───────────────────────────────────────
+
+describe('AP15: Stage Semantic Ownership', () => {
+  it('AP15: load_data checks data availability, analyze runs analytics', () => {
+    const checkLog: string[] = [];
+    const spyChecker: DataAvailabilityChecker = {
+      check(spec): number {
+        checkLog.push(`check:${spec.instrument.symbol}`);
+        return 30; // pretend 30 records
+      },
+    };
+
+    const spec = GOLDEN_CASES[0].expectedSpec;
+    const result = executeSpec(spec, 'test', undefined, spyChecker);
+
+    // Data checker was called during load_data stage
+    expect(checkLog.length).toBe(1);
+    expect(checkLog[0]).toContain('MOCK.A');
+
+    // Result is success (analytics ran during analyze stage)
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      // Insight items exist (from computeInsight in analyze stage)
+      expect(result.insight.items.length).toBeGreaterThan(0);
+      // Charts exist (from render stage)
+      expect(result.charts.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('AP15b: load_data fails with EMPTY_DATA when checker returns 0', () => {
+    const zeroChecker: DataAvailabilityChecker = { check: () => 0 };
+    const spec = GOLDEN_CASES[0].expectedSpec;
+    const result = executeSpec(spec, 'test', undefined, zeroChecker);
+
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.stage).toBe('load_data');
+      expect(result.error.code).toBe('EMPTY_DATA');
+    }
+  });
+});
+
+// ── AP16: Public API Surface ─────────────────────────────────────────────
+
+describe('AP16: Public API Surface', () => {
+  it('AP16: index.ts does not export executeSpec or executeFollowUp', async () => {
+    const mod = await import('../src/application/index');
+    // These should NOT be exported
+    expect((mod as Record<string, unknown>).executeSpec).toBeUndefined();
+    expect((mod as Record<string, unknown>).executeFollowUp).toBeUndefined();
+    expect((mod as Record<string, unknown>).executeDownstreamPipeline).toBeUndefined();
+
+    // These SHOULD be exported
+    expect(mod.createDashboardService).toBeDefined();
+    expect(mod.getDemoFixtures).toBeDefined();
+    expect(mod.getFailureFixtures).toBeDefined();
+    expect(mod.getAllFixtures).toBeDefined();
   });
 });

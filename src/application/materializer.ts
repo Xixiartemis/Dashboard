@@ -1,19 +1,20 @@
 /**
- * Materializer — executes a validated DashboardSpec through the real Domain pipeline
- * to produce a DashboardRunSuccess.
+ * Materializer — downstream pipeline execution.
  *
- * This is the single execution path: Golden Fixtures, Demo, and future Runtime
- * ALL go through this function. No shortcut, no hand-written data.
+ * Scope: validate_schema → load_data → analyze → render
  *
- * Pipeline: validate → load data → analyze → insight → render → DashboardRunSuccess
+ * understand_request and build_schema are owned by DashboardService
+ * (the orchestration owner), NOT this module.
+ *
+ * Data dependency seam: default uses real Domain getDataset().
+ * Inject custom checker for test/demo scenarios (e.g. empty data).
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
-import type { DashboardPatch } from '../schema/dashboard-patch';
 import { validateStructure } from '../validation/structural';
 import { validateSemantics } from '../validation/semantic';
-import { applyPatch } from '../patch/apply-patch';
 import { runAnalytics, computeInsight } from '../analytics/engine';
+import { getDataset } from '../data/mock-dataset';
 import { getMetric } from '../registries/metrics';
 import { compileViewToEChartsOption } from '../renderer/echarts-probe';
 import { MANIFEST } from '../data/manifest';
@@ -30,18 +31,32 @@ import type {
   PipelineStepId,
 } from './contracts';
 
-// ── Trace builder ─────────────────────────────────────────────────────────
+// ── Data availability seam ────────────────────────────────────────────────
 
-function createTrace(): PipelineStepSnapshot[] {
-  const steps: PipelineStepId[] = [
-    'understand_request',
-    'build_schema',
-    'validate_schema',
-    'load_data',
-    'analyze',
-    'render',
-  ];
-  return steps.map((id) => ({ id, status: 'pending' }));
+export interface DataAvailabilityChecker {
+  /** Returns record count if data exists, 0 if empty. */
+  check(spec: DashboardSpec): number;
+}
+
+/** Default: uses real Domain getDataset(). */
+const defaultDataChecker: DataAvailabilityChecker = {
+  check(spec: DashboardSpec): number {
+    const raw = getDataset(spec.instrument.symbol);
+    return raw?.length ?? 0;
+  },
+};
+
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+const DOWNSTREAM_STEPS: PipelineStepId[] = [
+  'validate_schema',
+  'load_data',
+  'analyze',
+  'render',
+];
+
+function createDownstreamTrace(): PipelineStepSnapshot[] {
+  return DOWNSTREAM_STEPS.map((id) => ({ id, status: 'pending' }));
 }
 
 function emit(
@@ -66,21 +81,7 @@ function markStep(
   }
 }
 
-// ── Failure helper ────────────────────────────────────────────────────────
-
-function failure(
-  input: string,
-  stage: PipelineStepId,
-  code: string,
-  message: string,
-  details: string | undefined,
-  recoverable: boolean,
-  trace: PipelineStepSnapshot[],
-): DashboardRunFailure {
-  return { status: 'error', input, stage, error: { code, message, details, recoverable }, trace };
-}
-
-// ── Provenance builder ────────────────────────────────────────────────────
+// failure helper removed — use mergeAndFail instead
 
 function buildProvenance(spec: DashboardSpec): DashboardDataProvenance {
   return {
@@ -98,8 +99,6 @@ function buildProvenance(spec: DashboardSpec): DashboardDataProvenance {
     },
   };
 }
-
-// ── Insight builder ───────────────────────────────────────────────────────
 
 function buildInsightResult(spec: DashboardSpec, insightData: ReturnType<typeof computeInsight>): DashboardInsightResult {
   const items: DashboardInsightItem[] = [];
@@ -144,41 +143,43 @@ function buildInsightResult(spec: DashboardSpec, insightData: ReturnType<typeof 
   };
 }
 
-// ── Main materializer ─────────────────────────────────────────────────────
+// ── Downstream pipeline (shared by initial + follow-up) ───────────────────
 
-export function executeSpec(
+export interface PipelineContext {
+  trace: PipelineStepSnapshot[];
+  options?: RunOptions;
+  input: string;
+  /** Upstream steps already completed (for trace merging). */
+  upstreamTrace?: PipelineStepSnapshot[];
+}
+
+/**
+ * Execute the downstream pipeline: validate → load → analyze → render.
+ * Returns DashboardRunSuccess or DashboardRunFailure.
+ *
+ * upstreamTrace is prepended to the returned trace for complete pipeline view.
+ */
+export function executeDownstreamPipeline(
   spec: DashboardSpec,
-  input: string,
-  options?: RunOptions,
+  ctx: PipelineContext,
+  dataChecker?: DataAvailabilityChecker,
 ): DashboardRunSuccess | DashboardRunFailure {
-  const trace = createTrace();
-
-  // ── understand_request ──
-  emit(options, 'understand_request', 'start');
-  markStep(trace, 'understand_request', 'running');
-  // For materialized specs, "understand" is instant — the spec IS the understanding
-  markStep(trace, 'understand_request', 'success');
-  emit(options, 'understand_request', 'success');
-
-  // ── build_schema ──
-  emit(options, 'build_schema', 'start');
-  markStep(trace, 'build_schema', 'running');
-  // Spec is already built (either from Interpreter or from Golden Case)
-  markStep(trace, 'build_schema', 'success', `schemaVersion=${spec.schemaVersion}`);
-  emit(options, 'build_schema', 'success', `schemaVersion=${spec.schemaVersion}`);
+  const { trace, options, input } = ctx;
+  const checker = dataChecker ?? defaultDataChecker;
 
   // ── validate_schema ──
   emit(options, 'validate_schema', 'start');
   markStep(trace, 'validate_schema', 'running');
+
   const structResult = validateStructure(spec);
   if (!structResult.ok) {
     markStep(trace, 'validate_schema', 'error', structResult.errors[0]?.message);
     emit(options, 'validate_schema', 'error', structResult.errors[0]?.message);
-    return failure(input, 'validate_schema',
+    return mergeAndFail(input, 'validate_schema',
       structResult.errors[0]?.code ?? 'STRUCTURAL_VALIDATION_FAILED',
       structResult.errors[0]?.message ?? '结构校验失败',
       structResult.errors.map((e) => `${e.code}: ${e.details ?? e.message}`).join('; '),
-      true, trace);
+      true, ctx);
   }
   const validatedSpec = structResult.spec;
 
@@ -186,31 +187,32 @@ export function executeSpec(
   if (!semResult.ok) {
     markStep(trace, 'validate_schema', 'error', semResult.errors[0]?.message);
     emit(options, 'validate_schema', 'error', semResult.errors[0]?.message);
-    return failure(input, 'validate_schema',
+    return mergeAndFail(input, 'validate_schema',
       semResult.errors[0]?.code ?? 'SEMANTIC_VALIDATION_FAILED',
       semResult.errors[0]?.message ?? '语义校验失败',
       semResult.errors.map((e) => `${e.code}: ${e.details ?? e.message}`).join('; '),
-      true, trace);
+      true, ctx);
   }
   markStep(trace, 'validate_schema', 'success');
   emit(options, 'validate_schema', 'success');
 
-  // ── load_data ──
+  // ── load_data (data availability check only) ──
   emit(options, 'load_data', 'start');
   markStep(trace, 'load_data', 'running');
-  const analytics = runAnalytics(validatedSpec);
-  if (analytics.isEmpty) {
+  const recordCount = checker.check(validatedSpec);
+  if (recordCount === 0) {
     markStep(trace, 'load_data', 'error', '无可用数据');
     emit(options, 'load_data', 'error', '无可用数据');
-    return failure(input, 'load_data', 'EMPTY_DATA', '查询结果为空，无可用数据',
-      `instrument=${validatedSpec.instrument.symbol}`, false, trace);
+    return mergeAndFail(input, 'load_data', 'EMPTY_DATA', '查询结果为空，无可用数据',
+      `instrument=${validatedSpec.instrument.symbol}`, false, ctx);
   }
-  markStep(trace, 'load_data', 'success', `${analytics.series.length} records`);
-  emit(options, 'load_data', 'success', `${analytics.series.length} records`);
+  markStep(trace, 'load_data', 'success', `${recordCount} records available`);
+  emit(options, 'load_data', 'success', `${recordCount} records`);
 
-  // ── analyze ──
+  // ── analyze (analytics + insight) ──
   emit(options, 'analyze', 'start');
   markStep(trace, 'analyze', 'running');
+  const analytics = runAnalytics(validatedSpec);
   const insightData = computeInsight(validatedSpec, analytics);
   const insightResult = buildInsightResult(validatedSpec, insightData);
   markStep(trace, 'analyze', 'success', `${insightResult.items.length} insight items`);
@@ -225,17 +227,18 @@ export function executeSpec(
     if (!compileResult.ok) {
       markStep(trace, 'render', 'error', compileResult.reason);
       emit(options, 'render', 'error', compileResult.reason);
-      return failure(input, 'render', 'RENDER_FAILED', '图表渲染失败',
-        compileResult.reason, false, trace);
+      return mergeAndFail(input, 'render', 'RENDER_FAILED', '图表渲染失败',
+        compileResult.reason, false, ctx);
     }
-    charts.push({
-      viewId: view.id,
-      title: view.title,
-      option: compileResult.option,
-    });
+    charts.push({ viewId: view.id, title: view.title, option: compileResult.option });
   }
   markStep(trace, 'render', 'success', `${charts.length} charts`);
   emit(options, 'render', 'success', `${charts.length} charts`);
+
+  // Merge upstream trace
+  const fullTrace = ctx.upstreamTrace
+    ? [...ctx.upstreamTrace, ...trace]
+    : trace;
 
   return {
     status: 'success',
@@ -244,48 +247,65 @@ export function executeSpec(
     charts,
     insight: insightResult,
     provenance: buildProvenance(validatedSpec),
-    trace,
+    trace: fullTrace,
   };
 }
 
-// ── Follow-up materializer ────────────────────────────────────────────────
+/** Merge upstream trace + downstream trace for failure results. */
+function mergeAndFail(
+  input: string,
+  stage: PipelineStepId,
+  code: string,
+  message: string,
+  details: string | undefined,
+  recoverable: boolean,
+  ctx: PipelineContext,
+): DashboardRunFailure {
+  // Mark all steps after the failing one as skipped
+  const stepOrder: PipelineStepId[] = ['validate_schema', 'load_data', 'analyze', 'render'];
+  const failIdx = stepOrder.indexOf(stage);
+  for (let i = failIdx + 1; i < stepOrder.length; i++) {
+    const step = ctx.trace.find((s) => s.id === stepOrder[i]);
+    if (step && step.status === 'pending') step.status = 'skipped';
+  }
+  const fullTrace = ctx.upstreamTrace
+    ? [...ctx.upstreamTrace, ...ctx.trace]
+    : ctx.trace;
+  return { status: 'error', input, stage, error: { code, message, details, recoverable }, trace: fullTrace };
+}
 
-export function executeFollowUp(
-  currentSpec: DashboardSpec,
-  patch: DashboardPatch,
+// ── Convenience: full pipeline for direct use (tests, fixtures) ───────────
+
+/**
+ * Execute a complete pipeline from a materialized spec.
+ * Creates upstream trace steps (understand_request, build_schema as instant/success)
+ * then runs the downstream pipeline.
+ *
+ * This is used by demo-fixtures and tests.
+ * DashboardService does its own orchestration.
+ */
+export function executeSpec(
+  spec: DashboardSpec,
   input: string,
   options?: RunOptions,
+  dataChecker?: DataAvailabilityChecker,
 ): DashboardRunSuccess | DashboardRunFailure {
-  const trace = createTrace();
-
-  // ── understand_request ──
-  emit(options, 'understand_request', 'start');
-  markStep(trace, 'understand_request', 'running');
-  markStep(trace, 'understand_request', 'success', `patch=${patch.op}`);
-  emit(options, 'understand_request', 'success', `patch=${patch.op}`);
-
-  // ── build_schema (apply patch) ──
-  emit(options, 'build_schema', 'start');
-  markStep(trace, 'build_schema', 'running');
-  const patchResult = applyPatch(currentSpec, patch);
-  if (!patchResult.ok) {
-    markStep(trace, 'build_schema', 'error', 'Patch 应用失败');
-    emit(options, 'build_schema', 'error', 'Patch 应用失败');
-    return failure(input, 'build_schema',
-      patchResult.errors[0]?.code ?? 'PATCH_FAILED',
-      patchResult.errors[0]?.message ?? '修改应用失败',
-      patchResult.errors.map((e) => `${e.code}: ${e.details ?? e.message}`).join('; '),
-      true, trace);
-  }
-  markStep(trace, 'build_schema', 'success', `patch=${patch.op} applied`);
-  emit(options, 'build_schema', 'success');
-
-  // Continue with the rest of the pipeline using the patched spec
-  const result = executeSpec(patchResult.spec, input, options);
-  // Merge traces: prepend our understand + build steps
-  const mergedTrace = [
-    ...trace.filter((s) => s.id === 'understand_request' || s.id === 'build_schema'),
-    ...result.trace.filter((s) => s.id !== 'understand_request' && s.id !== 'build_schema'),
+  // Build upstream trace (instant — spec is already materialized)
+  const upstreamTrace: PipelineStepSnapshot[] = [
+    { id: 'understand_request', status: 'success' },
+    { id: 'build_schema', status: 'success', message: `schemaVersion=${spec.schemaVersion}` },
   ];
-  return { ...result, trace: mergedTrace };
+
+  emit(options, 'understand_request', 'start');
+  emit(options, 'understand_request', 'success');
+  emit(options, 'build_schema', 'start');
+  emit(options, 'build_schema', 'success', `schemaVersion=${spec.schemaVersion}`);
+
+  const downstreamTrace = createDownstreamTrace();
+  return executeDownstreamPipeline(spec, {
+    trace: downstreamTrace,
+    options,
+    input,
+    upstreamTrace,
+  }, dataChecker);
 }

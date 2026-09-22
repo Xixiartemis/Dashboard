@@ -1,22 +1,19 @@
 /**
  * Demo Fixtures — real pipeline outputs for Google Studio UI development.
  *
- * Every fixture is produced by executing the REAL Domain pipeline:
- *   Golden DashboardSpec → Validation → Analytics → Insight → Renderer → DashboardRunSuccess
+ * Every fixture is produced by executing the REAL Domain pipeline.
+ * NO hand-written ECharts options, NO hardcoded insight numbers.
  *
- * NO hand-written ECharts options, NO hardcoded insight numbers, NO fake data.
- * If the Domain pipeline changes, these fixtures change automatically.
- *
- * UI consumes DashboardRunResult (same shape as future Runtime).
- * No if(fixtureMode) branching needed.
+ * Empty data fixture uses a DataAvailabilityChecker seam to inject
+ * "no data" without modifying Frozen Domain (Registry/Dataset).
  */
 
 import type { DashboardSpec } from '../schema/dashboard-spec';
 import { GOLDEN_CASES } from '../fixtures/golden-cases';
 import { NEGATIVE_CASES } from '../fixtures/negative-cases';
-import { executeSpec, executeFollowUp } from './materializer';
-import { validateStructure } from '../validation/structural';
-import { validateSemantics } from '../validation/semantic';
+import { executeSpec, executeDownstreamPipeline } from './materializer';
+import type { DataAvailabilityChecker } from './materializer';
+import { applyPatch } from '../patch/apply-patch';
 import type {
   DemoFixture,
   DemoFailureFixture,
@@ -25,16 +22,58 @@ import type {
   PipelineStepSnapshot,
 } from './contracts';
 
+// ── Data availability checker: always returns empty ───────────────────────
+
+const emptyDataChecker: DataAvailabilityChecker = {
+  check(_spec: DashboardSpec): number {
+    return 0;
+  },
+};
+
 // ── Golden Fixtures (G1-G5 initial + follow-up) ──────────────────────────
 
 function materializeGoldenFixtures(): DemoFixture[] {
   return GOLDEN_CASES.map((gc) => {
-    // Execute initial spec through real pipeline
     const initialResult = executeSpec(gc.expectedSpec, gc.input) as DashboardRunSuccess;
 
     let followUpResult: DashboardRunFailure | DashboardRunSuccess | undefined;
     if (gc.patch && gc.patchInput) {
-      followUpResult = executeFollowUp(gc.expectedSpec, gc.patch, gc.patchInput);
+      const patchResult = applyPatch(gc.expectedSpec, gc.patch);
+      if (patchResult.ok) {
+        const upstreamTrace: PipelineStepSnapshot[] = [
+          { id: 'understand_request', status: 'success', message: `patch=${gc.patch.op}` },
+          { id: 'build_schema', status: 'success', message: `patch=${gc.patch.op} applied` },
+        ];
+        followUpResult = executeDownstreamPipeline(patchResult.spec, {
+          trace: [
+            { id: 'validate_schema', status: 'pending' },
+            { id: 'load_data', status: 'pending' },
+            { id: 'analyze', status: 'pending' },
+            { id: 'render', status: 'pending' },
+          ],
+          input: gc.patchInput,
+          upstreamTrace,
+        });
+      } else {
+        followUpResult = {
+          status: 'error',
+          input: gc.patchInput,
+          stage: 'build_schema',
+          error: {
+            code: patchResult.errors[0]?.code ?? 'PATCH_FAILED',
+            message: patchResult.errors[0]?.message ?? 'Patch 失败',
+            recoverable: true,
+          },
+          trace: [
+            { id: 'understand_request', status: 'success' },
+            { id: 'build_schema', status: 'error' },
+            { id: 'validate_schema', status: 'skipped' },
+            { id: 'load_data', status: 'skipped' },
+            { id: 'analyze', status: 'skipped' },
+            { id: 'render', status: 'skipped' },
+          ],
+        };
+      }
     }
 
     return {
@@ -53,68 +92,35 @@ function materializeGoldenFixtures(): DemoFixture[] {
 function materializeFailureFixtures(): DemoFailureFixture[] {
   const failures: DemoFailureFixture[] = [];
 
-  // Failure 1: validation_error — use N1 (unknown instrument)
+  // Failure 1: validation_error — N1 (unknown instrument)
   const n1 = NEGATIVE_CASES.find((c) => c.id === 'N1')!;
   if (n1.spec) {
-    const structResult = validateStructure(n1.spec);
-    const semResult = structResult.ok ? validateSemantics(structResult.spec) : null;
-
-    const trace: PipelineStepSnapshot[] = [
-      { id: 'understand_request', status: 'success' },
-      { id: 'build_schema', status: 'success' },
-      { id: 'validate_schema', status: 'error', message: '未知的股票标识' },
-      { id: 'load_data', status: 'skipped' },
-      { id: 'analyze', status: 'skipped' },
-      { id: 'render', status: 'skipped' },
-    ];
-
-    const errors = !structResult.ok
-      ? structResult.errors
-      : semResult && !semResult.ok
-        ? semResult.errors
-        : [];
-
+    // Run through real pipeline — it will fail at validate_schema
+    const result = executeSpec(n1.spec, '分析 XYZ 公司的走势');
     failures.push({
       id: 'validation_error',
       name: '校验失败：未知股票',
       description: '使用不存在的股票代码，触发语义校验失败',
-      result: {
-        status: 'error',
-        input: '分析 XYZ 公司的走势',
-        stage: 'validate_schema',
-        error: {
-          code: errors[0]?.code ?? 'UNKNOWN',
-          message: errors[0]?.message ?? '校验失败',
-          details: errors.map((e) => `${e.code}: ${e.details ?? e.message}`).join('; '),
-          recoverable: true,
-        },
-        trace,
-      },
+      result: result as DashboardRunFailure,
     });
   }
 
-  // Failure 2: empty_data — use N7 but modify to get empty data scenario
-  // Instead, create a spec for a symbol with no data
-  const emptySpec = {
-    ...GOLDEN_CASES[0].expectedSpec,
-    instrument: { symbol: 'MOCK.EMPTY', displayName: '空数据公司', assetType: 'equity' as const },
-  };
-  // This will fail validation (unknown instrument), but we want an empty data scenario.
-  // Use the real pipeline: validate first, then the materializer will detect empty data.
-  // Since MOCK.EMPTY doesn't exist, it fails at validation. Let's use a different approach:
-  // Execute with a valid spec but force the empty data path by testing with 0-length slice.
-  // Actually, the simplest approach: run the materializer and it will fail naturally.
-  const emptyResult = executeSpec(emptySpec as DashboardSpec, '查看空数据公司的走势');
-
-  // The result will be a validation failure (unknown instrument), which is still a useful error fixture
-  if (emptyResult.status === 'error') {
-    failures.push({
-      id: 'empty_data',
-      name: '数据不存在',
-      description: '查询不存在的股票数据，触发数据加载失败',
-      result: emptyResult,
-    });
-  }
+  // Failure 2: empty_data — valid spec + empty data checker seam
+  // Use a valid Golden Case spec, but inject empty data checker
+  // so it passes validation but fails at load_data with EMPTY_DATA
+  const validSpec = GOLDEN_CASES[0].expectedSpec;
+  const emptyResult = executeSpec(
+    validSpec,
+    '查看无数据公司的走势',
+    undefined,
+    emptyDataChecker, // ← seam: returns 0 records
+  );
+  failures.push({
+    id: 'empty_data',
+    name: '数据不存在',
+    description: '通过数据可用性检查注入空数据，触发 load_data 阶段 EMPTY_DATA',
+    result: emptyResult as DashboardRunFailure,
+  });
 
   return failures;
 }
@@ -138,7 +144,6 @@ export function getFailureFixtures(): DemoFailureFixture[] {
   return _failureFixtures;
 }
 
-/** All fixtures combined for convenience. */
 export function getAllFixtures(): {
   golden: DemoFixture[];
   failures: DemoFailureFixture[];

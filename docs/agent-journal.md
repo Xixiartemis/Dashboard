@@ -289,6 +289,38 @@ npm run build        # success (268ms)
 | `tests/renderer-probe.test.ts` | rawInput 适配 data_as_of |
 ---
 
+---
+
+## Application Boundary Runtime Fix (v1.0.1)
+
+### 问题
+
+从"两个 Agent 并行后哪些错误会让双方返工"角度审查 Application Runtime，发现 6 个语义未闭合问题。
+
+### 修复
+
+1. **empty_data fixture** — 之前用 MOCK.EMPTY（不在 Registry），实际失败在 validate_schema 而非 load_data。引入 `DataAvailabilityChecker` 依赖 seam，默认使用真实 `getDataset()`。empty_data fixture 注入返回 0 的 checker，真正走 validate_schema SUCCESS → load_data → EMPTY_DATA。不修改 Frozen Domain。
+
+2. **Service error boundary** — `DashboardService.runQuery()` / `runFollowUp()` 现在 try/catch 包裹 interpreter 调用。异常映射为 `DashboardRunFailure`，Promise 永远 resolve。UI 不需要 try/catch。
+
+3. **Pipeline Events 包裹 interpreter** — `understand_request:start` 在 interpreter 调用之前 emit，`success` 在之后 emit。Service 是 orchestration owner，不是 materializer。
+
+4. **Follow-up 无重复事件** — 拆成 upstream (understand + build) 和 downstream (validate → load → analyze → render)。Service 负责 upstream，materializer 只负责 downstream。不再有 executeSpec 内部重复 emit。
+
+5. **Pipeline 语义重排** — `load_data` = 数据可用性检查（DataAvailabilityChecker.check()），`analyze` = runAnalytics + computeInsight。不再把整个 Analytics 塞进 load_data。
+
+6. **Public API 收紧** — `index.ts` 不再 export `executeSpec` / `executeFollowUp` / `executeDownstreamPipeline`。Fixtures 和 tests 直接从内部模块 import。
+
+### 测试
+
+AP11-AP16 新增：
+- AP11: 真正 empty data 走 load_data → EMPTY_DATA
+- AP12: interpreter throw → DashboardRunFailure (not rejected Promise)
+- AP13: 初始查询事件顺序正确
+- AP14: follow-up 事件无重复
+- AP15: load_data 语义 = 数据可用性检查
+- AP16: public API surface 不暴露内部执行器
+
 ## Application Boundary (v1.0 → UI Handoff)
 
 ### 为什么先做这个 Boundary
