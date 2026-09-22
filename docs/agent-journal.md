@@ -291,6 +291,47 @@ npm run build        # success (268ms)
 
 ---
 
+---
+
+## Interpreter Core (Block 1)
+
+### 为什么先做 Compiler 而不是 NL Parser
+
+自然语言是不确定输入，DashboardSpec 是确定性 Contract。如果直接做"文本→Spec JSON"，每种语言变化都需要调整 Spec 生成逻辑，调试时无法区分"语言理解错了"还是"业务编译错了"。
+
+所以先在 NL 和 Frozen Contract 之间建立 Canonical Intent IR，验证 deterministic compiler 能否把正确语义编译成正确业务 Contract。这通过以后，后面即使某条中文 Prompt 失败，也能明确知道是语言理解错了，而不是整个 Interpreter 黑盒不知道哪里错了。
+
+### 架构决策
+
+1. **Intent IR 不复制 Registry metadata** — 只存 canonical IDs（'close', 'MOCK.A'），label/unit/kind 来自 Registry。一个事实只保留一个来源。
+
+2. **displayMetrics vs metrics** — `metrics` = 全部指标（dependency closure），`displayMetrics` = 渲染到 view 的子集。分析用途但不直接展示的指标（如 change_pct 用于 ranking）不需要自己的 view。
+
+3. **Policy 决定结构，不是 if/else** — View grouping（同 unit 同 view）、default mark（volume→bar, price→line）、ranking annotation label 都由明确 policy 函数决定。
+
+4. **Compiler 是唯一知道 Spec 结构的模块** — Extractor/Resolver 不直接生成 DashboardSpec，只有 Spec Compiler 拼装完整结构。
+
+5. **Follow-up 编译 Patch 而非 Spec** — Patch Compiler 输出 DashboardPatch，交给冻结的 applyPatch() 处理 mutation + validation + presentation normalization。
+
+6. **分析级指标的 annotation 归属** — 当 ranking 指标不在任何 display group 中时（如 G1 的 change_pct），annotation 放在第一个 view（primary view）上。
+
+### 文件结构
+
+```
+src/interpreter/
+├── intent.ts              — Intent IR (ResolvedInitialIntent, ResolvedFollowUpIntent)
+├── errors.ts              — Typed interpreter error model
+├── policies.ts            — View grouping, default marks, ranking labels
+├── resolver/
+│   ├── instrument-resolver.ts  — alias → symbol (via Registry)
+│   └── metric-resolver.ts     — label/alias → metric ID
+├── compiler/
+│   ├── spec-compiler.ts       — InitialIntent → DashboardSpec
+│   └── patch-compiler.ts      — FollowUpIntent → DashboardPatch
+├── comparison.ts          — Semantic equality (for tests)
+└── index.ts               — Public exports
+```
+
 ## Application Boundary Runtime Fix (v1.0.1)
 
 ### 问题
