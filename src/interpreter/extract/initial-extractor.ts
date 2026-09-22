@@ -29,6 +29,7 @@ const UNSUPPORTED_PATTERNS = [
   /预测/, /买入/, /卖出/, /建议/, /新闻/, /财报/,
   /情绪/, /K线/, /MACD/, /RSI/, /市盈率/, /PE/,
   /止损/, /收益/, /盈利/, /亏损/,
+  /买还是卖/, /应该买/, /应该卖/, /值得买入/, /值得卖出/,
 ];
 
 export function detectUnsupported(text: string): string | null {
@@ -40,6 +41,18 @@ export function detectUnsupported(text: string): string | null {
 
 export function detectNaturalDayConflict(text: string): boolean {
   return /自然日/.test(text);
+}
+
+/** Detect conflicting intent: multiple chart types or multiple time ranges. */
+export function detectConflict(text: string): string | null {
+  // Multiple chart types
+  const hasLine = /折线图|折线/.test(text);
+  const hasBar = /柱状图|柱形图|柱图/.test(text);
+  if (hasLine && hasBar) return 'conflicting chart types';
+  // Multiple time ranges (e.g. "10天和30天")
+  const timeMatches = text.match(/(?:最近|近|过去)\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/g);
+  if (timeMatches && timeMatches.length > 1) return 'conflicting time ranges';
+  return null;
 }
 
 // ── Instrument Extraction ─────────────────────────────────────────────────
@@ -59,18 +72,22 @@ const METRIC_PATTERNS: Array<{ pattern: RegExp; raw: string }> = [
   { pattern: /涨跌幅/, raw: '涨跌幅' },
   { pattern: /成交量/, raw: '成交量' },
   { pattern: /交易量/, raw: '成交量' },
+  { pattern: /量能/, raw: '成交量' },
   { pattern: /收盘价/, raw: '收盘价' },
   { pattern: /开盘价/, raw: '开盘价' },
   { pattern: /最高价/, raw: '最高价' },
   { pattern: /最低价/, raw: '最低价' },
   { pattern: /收盘/, raw: '收盘价' },
   { pattern: /开盘/, raw: '开盘价' },
-  { pattern: /最高/, raw: '最高价' },
-  { pattern: /最低/, raw: '最低价' },
+  // "最高" only when NOT in ranking context (not followed by 的+digit)
+  { pattern: /最高(?!\s*的\s*\d)/, raw: '最高价' },
+  { pattern: /最低(?!\s*的\s*\d)/, raw: '最低价' },
 ];
 
 export function extractMetrics(text: string): string[] {
-  // First, identify ranking phrase spans to exclude from metric extraction
+  // First, identify ranking phrase spans to exclude from metric extraction.
+  // Use RANKING_PATTERNS with lookbehind to avoid matching metric keyword
+  // right after time text (e.g. "30天成交量" should not start a ranking span).
   const rankingSpans: Array<{ start: number; end: number }> = [];
   for (const { re } of RANKING_PATTERNS) {
     const match = re.exec(text);
@@ -88,7 +105,6 @@ export function extractMetrics(text: string): string[] {
       const match = pattern.exec(text);
       if (match) {
         const pos = match.index;
-        // Check if this match is inside a ranking phrase
         const inRanking = rankingSpans.some((s) => pos >= s.start && pos < s.end);
         if (!inRanking) {
           found.push({ raw, pos });
@@ -98,7 +114,6 @@ export function extractMetrics(text: string): string[] {
     }
   }
 
-  // Sort by position in text (order of appearance)
   found.sort((a, b) => a.pos - b.pos);
   return found.map((f) => f.raw);
 }
@@ -106,8 +121,8 @@ export function extractMetrics(text: string): string[] {
 // ── Time Range Extraction ─────────────────────────────────────────────────
 
 export function extractTimeRange(text: string): number | undefined {
-  // Pattern: (最近|近)(N)(个交易日|天|日)
-  const match = text.match(/(?:最近|近)\s*(\d+|[一二三四五六七八九十两二十]+)\s*(?:个交易日|个?天|日)/);
+  // Pattern: (最近|近|过去)(N)(个交易日|天|日)
+  const match = text.match(/(?:最近|近|过去)\s*(\d+|[一二三四五六七八九十两二十]+)\s*(?:个交易日|个?天|日)/);
   if (match) return parseNumber(match[1]);
 
   const match2 = text.match(/(\d+|[一二三四五六七八九十两二十]+)\s*个交易日/);
@@ -128,14 +143,18 @@ export function extractMark(text: string): 'line' | 'bar' | undefined {
 
 const RANKING_PATTERNS: Array<{ re: RegExp; metric: string; order: 'asc' | 'desc'; group: number }> = [
   // Pattern: keyword + magnitude(最大/最高) + 的 + N + time_unit
-  // Restriction: only punctuation/whitespace between keyword and magnitude (no CJK text)
-  { re: /涨幅[\s，。、]*(?:最大|最高|涨得最厉害)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'desc', group: 1 },
-  { re: /跌幅[\s，。、]*(?:最大|最高|跌得最厉害)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'asc', group: 1 },
-  { re: /成交量[\s，。、]*(?:最大|最高)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '成交量', order: 'desc', group: 1 },
-  { re: /成交量[\s，。、]*最低的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '成交量', order: 'asc', group: 1 },
-  // Standalone "涨得最厉害" / "跌得最厉害" without "涨幅/跌幅" prefix
-  { re: /涨得最厉害的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'desc', group: 1 },
-  { re: /跌得最厉害的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'asc', group: 1 },
+  // Negative lookbehind (?<!\d) prevents matching keyword right after a number
+  // (e.g. "30天成交量" → "成交量" after "天" is OK, not after digit)
+  { re: /涨幅[\s，。、]*(?:最大|最高|涨得最厉害|涨得最多)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'desc', group: 1 },
+  { re: /跌幅[\s，。、]*(?:最大|最高|最低|跌得最厉害|跌得最多|跌得最惨)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'asc', group: 1 },
+  { re: /(?<!天|日|\d)(?:成交量|交易量)[\s，。、]*(?:最大|最高)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '成交量', order: 'desc', group: 1 },
+  { re: /(?<!天|日|\d)(?:成交量|交易量)[\s，。、]*最低的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '成交量', order: 'asc', group: 1 },
+  // Standalone "涨得最厉害/最多" / "跌得最厉害/最多/最惨" without prefix
+  { re: /涨得(?:最厉害|最多)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'desc', group: 1 },
+  { re: /跌得(?:最厉害|最多|最惨)的\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'asc', group: 1 },
+  // "涨最多" / "跌最多" without "得" particle
+  { re: /涨最多(?:的)?\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'desc', group: 1 },
+  { re: /跌最多(?:的)?\s*(\d+|[一二三四五六七八九十]+)\s*(?:个交易日|个?天|日)/, metric: '涨跌幅', order: 'asc', group: 1 },
   // 涨幅前N / 跌幅前N / 成交量前N
   { re: /涨幅前\s*(\d+|[一二三四五六七八九十]+)/, metric: '涨跌幅', order: 'desc', group: 1 },
   { re: /跌幅前\s*(\d+|[一二三四五六七八九十]+)/, metric: '涨跌幅', order: 'asc', group: 1 },
@@ -177,6 +196,12 @@ export function extractInitialIntent(text: string): {
 
   if (detectNaturalDayConflict(text)) {
     return { ok: false, code: 'UNSUPPORTED_CAPABILITY', details: '自然日不支持，当前仅支持交易日' };
+  }
+
+  // Check conflicting intent (multiple marks, multiple time ranges)
+  const conflict = detectConflict(text);
+  if (conflict) {
+    return { ok: false, code: 'CONFLICTING_INTENT', details: conflict };
   }
 
   const instrument = extractInstrument(text);

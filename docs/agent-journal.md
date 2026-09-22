@@ -334,6 +334,28 @@ src/interpreter/
 
 ---
 
+## Block 3: Interpreter Evaluation + Hardening
+
+### 方法论
+不是"发现一句 Prompt 不支持→加 regex→测试通过"，而是系统性评测：Corpus→Baseline→Failure Taxonomy→Generalized Hardening→Holdout Verification。
+
+### 关键设计决策
+
+1. **Ranking span detection** — 用 `(?<!天|日|\d)` lookbehind 防止 "30天成交量" 中的 "成交量" 被误识别为排名短语起点。已知限制：时间文本紧接排名短语时仍有边界问题（COMP-003, H-I-004）。
+
+2. **Metric extraction with ranking exclusion** — "最高/最低" 使用负前瞻 `(?!\s*的\s*\d)` 排除排名上下文中的误匹配。
+
+3. **Generalized rules not per-case patches** — "最多/最惨" 加入排名 magnitudes 而非写精确句子 regex；"替换为/换成" 加入动词规范化而非写完整 follow-up 模式。
+
+4. **Conflict detection** — 检测多种图表类型（折线图+柱状图）和多种时间范围作为 CONFLICTING_INTENT。
+
+5. **FALSE_ACCEPT=0 优先于 coverage** — 宁可保守拒绝边界表达，不放宽 Parser 换表面 100%。
+
+### 已知限制
+- 排名 span 检测在时间文本紧接排名短语时有边界问题
+- 不支持自由形式中文，只支持文档化的语言模式
+- 单一 timeRange / 单一 preferredMark
+
 ## Block 2: Natural Language Understanding
 
 先冻结 Compiler（Block 1），再开发 Language Layer（Block 2）。Prompt 失败可以定位在 NLU，不怀疑 Spec Compiler。

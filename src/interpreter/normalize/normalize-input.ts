@@ -49,10 +49,12 @@ const SYNONYM_MAP: [RegExp, string][] = [
   // Common verb forms
   [/看看/g, '查看'],
 
-  // Mark verbs
+  // Mark/replace verbs (normalize to '改为')
   [/改成/g, '改为'],
   [/变成/g, '改为'],
   [/换成/g, '改为'],
+  [/替换为/g, '改为'],
+  [/替换/g, '改为'],
 ];
 
 /**

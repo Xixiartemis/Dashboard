@@ -41,6 +41,7 @@ const METRIC_ALIASES: Record<string, string> = {
   // 成交量
   '成交量': 'volume',
   '交易量': 'volume',
+  '量能': 'volume',
   '量': 'volume',
   'volume': 'volume',
 
