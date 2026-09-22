@@ -1,14 +1,14 @@
 /**
- * Interpreter Core — public API.
+ * Interpreter — public API.
  *
  * Architecture:
- *   Resolved Intent → Compiler → DashboardSpec / DashboardPatch
+ *   NL → Normalizer → Extractor → Resolver → Compiler → DashboardSpec/Patch
  *
- * The Interpreter does NOT parse natural language (Block 2).
- * This module proves the deterministic compiler core works correctly.
+ * Block 1: Compiler (frozen)
+ * Block 2: NL Understanding (this module)
  */
 
-// ── Intent IR ─────────────────────────────────────────────────────────────
+// ── Intent IR (frozen) ────────────────────────────────────────────────────
 
 export type {
   ResolvedInitialIntent,
@@ -25,12 +25,12 @@ export type {
 export type { InterpreterErrorCode, InterpreterError } from './errors';
 export { makeInterpreterError } from './errors';
 
-// ── Resolvers ─────────────────────────────────────────────────────────────
+// ── Resolvers (frozen) ────────────────────────────────────────────────────
 
 export { resolveInstrumentId } from './resolver/instrument-resolver';
 export { resolveMetricId, resolveMetricIds } from './resolver/metric-resolver';
 
-// ── Policies ──────────────────────────────────────────────────────────────
+// ── Policies (frozen) ─────────────────────────────────────────────────────
 
 export {
   groupMetricsByUnit,
@@ -45,11 +45,24 @@ export {
   generateIntentSummary,
 } from './policies';
 
-// ── Compilers ─────────────────────────────────────────────────────────────
+// ── Compilers (frozen) ────────────────────────────────────────────────────
 
 export { compileInitialIntent } from './compiler/spec-compiler';
 export { compileFollowUpIntent } from './compiler/patch-compiler';
 
-// ── Comparison (for tests) ────────────────────────────────────────────────
+// ── Comparison (frozen) ───────────────────────────────────────────────────
 
 export { compareSpecSemantics, comparePatchSemantics } from './comparison';
+
+// ── NL Pipeline (Block 2) ─────────────────────────────────────────────────
+
+export { normalizeInput } from './normalize/normalize-input';
+export { extractInitialIntent, detectUnsupported, detectNaturalDayConflict } from './extract/initial-extractor';
+export { extractFollowUpIntent } from './extract/followup-extractor';
+export { parseNumber, parseChineseNumber, extractNumbers } from './extract/number-parser';
+export { resolveInitialIntent } from './resolver/initial-resolver';
+export { resolveFollowUpIntent } from './resolver/followup-context-resolver';
+
+// ── Full Interpreter ──────────────────────────────────────────────────────
+
+export { DeterministicInterpreter } from './deterministic-interpreter';

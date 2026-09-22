@@ -334,6 +334,14 @@ src/interpreter/
 
 ---
 
+## Block 2: Natural Language Understanding
+
+先冻结 Compiler（Block 1），再开发 Language Layer（Block 2）。Prompt 失败可以定位在 NLU，不怀疑 Spec Compiler。
+
+分4层：Normalizer（surface only）→ Extractor（raw Chinese slots）→ Resolver（canonical IDs via frozen Registries）→ Compiler（frozen）。
+
+关键设计：排名模式用 `[\s，。、]*` 防止跨子句误匹配；Metric 提取排除排名短语范围；Follow-up 提取顺序重要（先 time_range/mark 再 replace）。
+
 ## Interpreter Core Contract Tightening
 
 ### 1. RankingIntent 移除 annotationLabel

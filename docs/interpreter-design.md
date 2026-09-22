@@ -104,6 +104,34 @@ Follow-up 使用冻结的 `applyPatch()` 处理 spec mutation + validation + pre
 - 预测股价 → UNSUPPORTED_CAPABILITY
 - 买入建议 → UNSUPPORTED_CAPABILITY
 
+## Block 2: Natural Language Understanding
+
+### Normalizer
+Surface-only: fullwidth→halfwidth, whitespace (letter+CJK, CJK+digit), punctuation, synonym unification (柱形图→柱状图, 看看→查看, 改成→改为). Does NOT make semantic decisions.
+
+### Draft Intent
+Intermediate representation between extraction and resolution. Allows raw Chinese strings. Not yet canonicalized.
+
+### Initial Extractor
+Extracts structured slots from normalized text:
+- instrument: regex for "X公司" / "MOCK.X"
+- displayMetrics: metric patterns sorted by text position (excludes ranking phrases)
+- timeRange: "最近N个交易日" / "近N天"
+- mark: "折线图" / "柱状图"
+- rankings: "跌幅最大的N天" / "涨幅前N" / "成交量最高的N天"
+
+Key design: ranking patterns use `[\s，。、]*` between keyword and magnitude (not `.*?`) to prevent cross-clause bridging.
+
+### Follow-up Extractor
+Pattern-matches: replace_metric, set_time_range, set_mark, add_metric.
+Order matters: check set_time_range and set_mark BEFORE replace_metric.
+
+### Context Resolver
+Maps draft + currentSpec → resolved intent. add_metric finds target view by unit. set_mark finds series by metric name.
+
+### DeterministicInterpreter
+Implements DashboardInterpreterPort. Pipeline: normalize → extract → resolve → compile.
+
 ## Registry 仍然是唯一事实来源
 
 Interpreter 不复制 label/unit/kind/instrument metadata。
