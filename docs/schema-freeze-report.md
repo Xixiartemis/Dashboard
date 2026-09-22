@@ -148,3 +148,22 @@ SCHEMA_FREEZE_CANDIDATE=YES
 | Series.unit 未闭合 | ✅ | SERIES_UNIT_MISMATCH, A23 |
 | rank_summary 仍可与 transform 漂移 | ✅ | discriminated union, A24-A25 |
 | JSON Schema 非官方导出 | ✅ | z.toJSONSchema(), A26 |
+| add_metric scope 修正 | ✅ | 仅更新目标 view, A27 |
+
+## Round 3.1: add_metric presentation scope fix
+
+```
+PATCH_PRESENTATION_SCOPING=PASS (A27 — multi-view counterexample)
+ADVERSARIAL_REGRESSION_CASES=27/27 PASS
+GOLDEN_CASES=5/5 PASS
+FOLLOWUP_CASES=5/5 PASS
+NEGATIVE_CASES=9/9 PASS
+TOTAL_TESTS=116/116
+TYPECHECK=PASS
+TESTS=PASS
+LINT=PASS
+BUILD=PASS
+P0_BLOCKERS=0
+P1_BLOCKERS=0
+SCHEMA_FREEZE_CANDIDATE=YES
+```

@@ -475,11 +475,61 @@ describe('A26: JSON Schema key constraints verified', () => {
     expect(schemaStr).toContain('"ordinal"');
 
     // timeRange.count must have min=1 max=60
-    // (Zod toJSONSchema should include minimum/maximum)
     expect(schemaStr).toContain('"minimum"');
     expect(schemaStr).toContain('"maximum"');
 
     // Must be a proper object with properties
     expect(schema).toHaveProperty('properties');
+  });
+});
+
+describe('A27: add_metric presentation scoped to target view only', () => {
+  it('A27: add_metric(close) to price_view leaves volume_view title untouched', () => {
+    // Build a multi-view spec (G5 has 1 view; we construct a 2-view variant)
+    const spec = makeSpec({
+      metrics: [
+        { id: 'close', label: '收盘价', kind: 'raw', unit: 'CNY' },
+        { id: 'volume', label: '成交量', kind: 'raw', unit: 'share' },
+      ],
+      views: [
+        {
+          id: 'price_view', title: 'A公司最近30个交易日收盘价',
+          x: { field: 'date', type: 'ordinal' },
+          series: [{ id: 'close_s', field: 'close', mark: 'line', unit: 'CNY' }],
+          annotations: [],
+        },
+        {
+          id: 'volume_view', title: 'A公司最近30个交易日成交量',
+          x: { field: 'date', type: 'ordinal' },
+          series: [{ id: 'vol_s', field: 'volume', mark: 'bar', unit: 'share' }],
+          annotations: [],
+        },
+      ],
+      insight: { intentSummary: '分析A公司最近30个交易日的收盘价和成交量', facts: [] },
+    });
+
+    const priceViewBefore = spec.views.find((v) => v.id === 'price_view')!;
+    const volumeViewBefore = spec.views.find((v) => v.id === 'volume_view')!;
+    const volumeTitleBefore = volumeViewBefore.title;
+    const volumeSeriesBefore = JSON.stringify(volumeViewBefore.series);
+
+    // add_metric high to price_view only
+    const result = applyPatch(spec, { op: 'add_metric', metric: 'high', viewId: 'price_view' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // price_view: series grew, title updated
+      const priceView = result.spec.views.find((v) => v.id === 'price_view')!;
+      expect(priceView.series.length).toBe(priceViewBefore.series.length + 1);
+      expect(priceView.series.some((s) => s.field === 'high')).toBe(true);
+      expect(priceView.title).toContain('最高价');
+
+      // volume_view: series and title MUST be strictly unchanged
+      const volumeView = result.spec.views.find((v) => v.id === 'volume_view')!;
+      expect(volumeView.title).toBe(volumeTitleBefore);
+      expect(JSON.stringify(volumeView.series)).toBe(volumeSeriesBefore);
+
+      // Dashboard-level intentSummary can update
+      expect(result.spec.insight.intentSummary).toContain('最高价');
+    }
   });
 });

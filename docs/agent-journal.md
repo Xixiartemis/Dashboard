@@ -260,6 +260,18 @@ npx oxlint src/ tests/ # 0 errors, 0 warnings
 npm run build        # success (268ms)
 ```
 
+---
+
+## Round 3.1: add_metric presentation scope fix
+
+单 view Golden Case 掩盖了 scoped Patch 在 multi-view 状态下产生的 presentation side effect。
+
+`add_metric` Patch 明确包含 `viewId`，代表只向目标 view 增加 series。但 `normalizePresentationMetadata()` 的 `add_metric` 分支遍历所有 views 调用 `updateTitleForAddMetric()`，导致非目标 view 的 title 被错误修改。
+
+修复: `add_metric` presentation normalization 只更新 `v.id === patch.viewId` 的目标 view。`intentSummary` 作为 Dashboard 级用户意图，仍根据新增指标同步更新。
+
+通过多 view counterexample (A27) 发现并修复。
+
 ### 主要修改文件 (Round 3)
 
 | 文件 | 修改 |

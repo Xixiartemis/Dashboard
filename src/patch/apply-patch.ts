@@ -136,11 +136,14 @@ function normalizePresentationMetadata(
       const metricId = patch.metric as string;
       const metricDef = getMetric(metricId);
       if (metricDef) {
-        updatedViews = currentSpec.views.map((v) => ({
-          ...v,
-          title: updateTitleForAddMetric(v.title, metricDef.label),
-        }));
-        // For intentSummary, append if not mentioned
+        const targetViewId = patch.viewId as string;
+        // Only update the target view's title — other views are untouched
+        updatedViews = currentSpec.views.map((v) =>
+          v.id === targetViewId
+            ? { ...v, title: updateTitleForAddMetric(v.title, metricDef.label) }
+            : v,
+        );
+        // Dashboard-level intentSummary can still reflect the new metric
         if (!currentSpec.insight.intentSummary.includes(metricDef.label)) {
           updatedInsight = {
             ...currentSpec.insight,
